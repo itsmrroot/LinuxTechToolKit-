@@ -36,7 +36,8 @@ fi
 # ============================================================
 #  GLOBALS
 # ============================================================
-TOOLKIT_VERSION="1.0.0"
+TOOLKIT_VERSION="1.1.0"
+GITHUB_REPO="itsmrroot/LinuxTechToolKit-"
 REPORT_DIR="${HOME}/TechToolkit_Reports"
 LOG_FILE="${REPORT_DIR}/toolkit_log.txt"
 IS_ROOT=0
@@ -140,6 +141,21 @@ get_hostname() {
         uname -n
     else
         printf '%s' "${HOSTNAME:-unknown}"
+    fi
+}
+
+# detect_virt -- "none" on bare metal, else the virt/container type (kvm, docker, lxc, ...)
+detect_virt() {
+    if need_cmd systemd-detect-virt; then
+        systemd-detect-virt 2>/dev/null
+    elif [ -f /.dockerenv ]; then
+        echo "docker"
+    elif grep -qa 'container=lxc' /proc/1/environ 2>/dev/null; then
+        echo "lxc"
+    elif [ -r /proc/cpuinfo ] && grep -qi 'hypervisor' /proc/cpuinfo 2>/dev/null; then
+        echo "vm"
+    else
+        echo "none"
     fi
 }
 
@@ -389,12 +405,16 @@ run_live_monitor() {
 #  SYSTEM INFO & REPORTS
 # ============================================================
 
-info_quick() {
-    header "Quick System Summary"
+# print_quick_summary -- the data-only core, reusable from the interactive
+# menu and from the --quick-summary CLI flag (no header/pause of its own).
+print_quick_summary() {
     local kernel os cpu_model cpu_cores mem_total mem_avail uptime_s gpu
     kernel=$(uname -r)
     os="$DISTRO_NAME"
     cpu_model=$(lscpu 2>/dev/null | awk -F': ' '/^Model name/{print $2; exit}')
+    cpu_model=$(printf '%s' "$cpu_model" | sed 's/^ *//;s/ *$//')
+    # Some virtualized ARM hosts report lscpu's Model name as a bare "-"
+    [ "$cpu_model" = "-" ] && cpu_model=""
     [ -z "$cpu_model" ] && cpu_model=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)
     [ -z "$cpu_model" ] && cpu_model=$(awk -F': ' '/^Hardware/{print $2; exit}' /proc/cpuinfo)
     cpu_model=$(printf '%s' "$cpu_model" | sed 's/^ *//')
@@ -419,6 +439,16 @@ info_quick() {
         chassis=$(hostnamectl 2>/dev/null | awk -F': ' '/Chassis/{print $2}')
         [ -n "$chassis" ] && printf ' %-10s: %s\n' "Chassis" "$chassis"
     fi
+    local virt; virt=$(detect_virt)
+    if [ "$virt" != "none" ] && [ -n "$virt" ]; then
+        printf ' %-10s: %s%s%s\n' "Virt" "$C_YEL" "$virt" "$C_RST"
+    fi
+    printf ' %-10s: %s\n' "LSM" "$(lsm_status_line)"
+}
+
+info_quick() {
+    header "Quick System Summary"
+    print_quick_summary
     pause
 }
 
@@ -550,6 +580,32 @@ info_boot_time() {
     pause
 }
 
+info_encryption_status() {
+    header "Disk Encryption (LUKS) Status"
+    local found=0
+    while read -r name fstype; do
+        [ "$fstype" = "crypto_LUKS" ] || continue
+        found=1
+        printf ' %-20s %s\n' "/dev/$name" "${C_GRN}LUKS encrypted${C_RST}"
+    done < <(lsblk -rno NAME,FSTYPE 2>/dev/null)
+    if [ "$found" -eq 0 ]; then
+        printf '%s\n' "${C_YEL}No LUKS-encrypted block devices found.${C_RST}"
+    fi
+    if need_cmd cryptsetup; then
+        echo
+        printf '%s\n' "${C_CYAN}Active mappings (cryptsetup status):${C_RST}"
+        local mapper
+        for mapper in /dev/mapper/*; do
+            [ -e "$mapper" ] || continue
+            [ "$(basename "$mapper")" = "control" ] && continue
+            run_priv "cryptsetup status" cryptsetup status "$(basename "$mapper")" 2>/dev/null | head -3
+        done
+    fi
+    echo
+    printf '%s\n' "${C_DIM}Root filesystem: $(findmnt -no FSTYPE / 2>/dev/null), source $(findmnt -no SOURCE / 2>/dev/null)${C_RST}"
+    pause
+}
+
 sysinfo_menu() {
     while true; do
         header "System Info & Reports"
@@ -562,6 +618,7 @@ sysinfo_menu() {
  ${C_YEL}[6]${C_RST}  Critical errors, last 24h
  ${C_YEL}[7]${C_RST}  Failed systemd units
  ${C_YEL}[8]${C_RST}  Boot time analysis
+ ${C_YEL}[9]${C_RST}  Disk encryption (LUKS) status
 
  ${C_RED}[0]${C_RST}  Back
 EOF
@@ -576,6 +633,7 @@ EOF
             6) info_recent_errors ;;
             7) info_failed_services ;;
             8) info_boot_time ;;
+            9) info_encryption_status ;;
             0) return ;;
             *) invalid_choice ;;
         esac
@@ -720,9 +778,71 @@ repair_create_snapshot() {
     pause
 }
 
+repair_backup_config() {
+    header "Backup Key Config Files"
+    local f="${REPORT_DIR}/ConfigBackup_$(stamp).tar.gz"
+    printf '%s\n' "${C_DIM}Archiving /etc, crontabs, and the installed-package list. This is a lightweight config snapshot, not a full system backup - use Create System Snapshot for that.${C_RST}"
+    printf '%s\n' "${C_YEL}Secrets are deliberately left out: /etc/shadow, /etc/gshadow, SSH host private keys, and any *.key/*.pem files.${C_RST}"
+    local work; work=$(mktemp -d)
+    mkdir -p "$work/crontabs"
+    local u
+    for u in root $(awk -F: '$3>=1000{print $1}' /etc/passwd); do
+        run_priv "crontab -l $u" crontab -l -u "$u" 2>/dev/null > "$work/crontabs/$u.cron"
+        [ -s "$work/crontabs/$u.cron" ] || rm -f "$work/crontabs/$u.cron"
+    done
+    case "$PKG_MANAGER" in
+        apt) dpkg-query -W -f='${Package}\t${Version}\n' > "$work/packages.txt" 2>&1 ;;
+        dnf|yum) rpm -qa --qf '%{NAME}\t%{VERSION}-%{RELEASE}\n' | sort > "$work/packages.txt" 2>&1 ;;
+        pacman) pacman -Q > "$work/packages.txt" 2>&1 ;;
+        zypper) rpm -qa | sort > "$work/packages.txt" 2>&1 ;;
+        apk) apk info -v > "$work/packages.txt" 2>&1 ;;
+    esac
+    # Archive /etc directly (no intermediate copy - avoids ever leaving a root-owned
+    # duplicate of /etc, including its secrets, sitting around in /tmp) with GNU tar's
+    # basename-only exclude matching (a pattern with no '/' matches any file with that
+    # basename, anywhere in the tree) to leave out credential material.
+    run_priv "tar config backup" tar -czf "$f" \
+        --exclude='shadow' --exclude='shadow-' --exclude='gshadow' --exclude='gshadow-' \
+        --exclude='ssh_host_*_key' --exclude='*.key' --exclude='*.pem' \
+        /etc -C "$work" crontabs packages.txt 2>/dev/null
+    run_priv "chown backup" chown "$(id -u):$(id -g)" "$f" 2>/dev/null
+    run_priv "chmod backup" chmod 600 "$f" 2>/dev/null
+    rm -rf "$work"
+    if [ -s "$f" ]; then
+        printf '%s\n' "${C_GRN}Saved to $f (permissions 600)${C_RST}"
+        log_action "Config backup saved to $f"
+    else
+        printf '%s\n' "${C_RED}Backup failed - check permissions.${C_RST}"
+    fi
+    pause
+}
+
+repair_restore_config_browse() {
+    header "Extract a Config Backup for Review"
+    printf '%s\n' "${C_DIM}This never overwrites live files - it extracts a backup into a folder so you can diff/copy what you need by hand.${C_RST}"
+    ls -1t "${REPORT_DIR}"/ConfigBackup_*.tar.gz 2>/dev/null | nl -w2 -s') '
+    local pick=""
+    read -r -p "Number to extract (blank to cancel): " pick
+    [ -z "$pick" ] && return
+    local file
+    file=$(ls -1t "${REPORT_DIR}"/ConfigBackup_*.tar.gz 2>/dev/null | sed -n "${pick}p")
+    if [ -z "$file" ] || [ ! -f "$file" ]; then
+        printf '%s\n' "${C_RED}Not a valid selection.${C_RST}"
+        pause; return
+    fi
+    local dest="${REPORT_DIR}/ConfigBackup_extracted_$(stamp)"
+    mkdir -p "$dest"
+    tar -xzf "$file" -C "$dest"
+    printf '%s\n' "${C_GRN}Extracted to $dest${C_RST}"
+    open_path "$dest"
+    pause
+}
+
 repair_menu() {
+    local virt; virt=$(detect_virt)
     while true; do
         header "Repair & Maintenance"
+        [ "$virt" != "none" ] && printf '%s\n\n' "${C_DIM}Note: running inside $virt - bootloader/initramfs/DKMS tools below likely won't apply.${C_RST}"
         cat <<EOF
  ${C_YEL}[1]${C_RST}  Fix broken packages          ${C_DIM}(dpkg --configure -a / fix-broken)${C_RST}
  ${C_YEL}[2]${C_RST}  Full system update           ${C_DIM}($PKG_MANAGER)${C_RST}
@@ -734,6 +854,8 @@ repair_menu() {
  ${C_YEL}[8]${C_RST}  Restart a specific service
  ${C_YEL}[9]${C_RST}  Rebuild DKMS kernel modules
  ${C_YEL}[10]${C_RST} Create system snapshot / restore point
+ ${C_YEL}[11]${C_RST} Backup key config files      ${C_DIM}(/etc, crontabs, package list)${C_RST}
+ ${C_YEL}[12]${C_RST} Extract a config backup for review
 
  ${C_RED}[0]${C_RST}  Back
 EOF
@@ -750,6 +872,8 @@ EOF
             8) repair_restart_service ;;
             9) repair_dkms_rebuild ;;
             10) repair_create_snapshot ;;
+            11) repair_backup_config ;;
+            12) repair_restore_config_browse ;;
             0) return ;;
             *) invalid_choice ;;
         esac
@@ -1149,6 +1273,174 @@ sec_world_writable() {
     pause
 }
 
+sec_fail2ban() {
+    header "Fail2ban Status"
+    if ! need_cmd fail2ban-client; then
+        printf '%s\n' "${C_YEL}fail2ban isn't installed. It's the single most-recommended tool for cutting brute-force attempts on internet-facing servers.${C_RST}"
+        offer_install fail2ban-client fail2ban || { pause; return; }
+        run_priv "enable fail2ban" systemctl enable --now fail2ban 2>/dev/null
+    fi
+    if ! run_priv "fail2ban-client ping" fail2ban-client ping >/dev/null 2>&1; then
+        printf '%s\n' "${C_YEL}fail2ban is installed but not running.${C_RST}"
+        local ans=""; read -r -p "Start it now? [y/N] " ans
+        [[ "$ans" =~ ^[Yy]$ ]] && run_priv "start fail2ban" systemctl start fail2ban
+    fi
+    echo
+    run_priv "fail2ban status" fail2ban-client status
+    local jails
+    jails=$(run_priv "fail2ban jail list" fail2ban-client status 2>/dev/null | awk -F':' '/Jail list/{print $2}' | tr ',' '\n' | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//;/^$/d')
+    if [ -n "$jails" ]; then
+        echo
+        local jail
+        while IFS= read -r jail; do
+            printf '%s\n' "${C_CYAN}--- $jail ---${C_RST}"
+            run_priv "fail2ban jail status $jail" fail2ban-client status "$jail" 2>/dev/null | grep -E 'Currently banned|Total banned|Banned IP'
+        done <<< "$jails"
+    fi
+    echo
+    echo " [1] Ban an IP   [2] Unban an IP   [0] Back"
+    local o=""; read -r -p "Select: " o
+    case "$o" in
+        1)
+            [ -z "$jails" ] && { printf '%s\n' "${C_YEL}No active jails to ban against.${C_RST}"; pause; return; }
+            local jail_name ip
+            read -r -p "Jail name (e.g. sshd): " jail_name
+            read -r -p "IP address to ban: " ip
+            [ -n "$jail_name" ] && [ -n "$ip" ] && run_priv "fail2ban ban" fail2ban-client set "$jail_name" banip "$ip"
+            ;;
+        2)
+            local jail_name ip
+            read -r -p "Jail name (e.g. sshd): " jail_name
+            read -r -p "IP address to unban: " ip
+            [ -n "$jail_name" ] && [ -n "$ip" ] && run_priv "fail2ban unban" fail2ban-client set "$jail_name" unbanip "$ip"
+            ;;
+    esac
+    pause
+}
+
+sec_lynis_audit() {
+    header "Lynis Security Audit"
+    if ! need_cmd lynis; then
+        printf '%s\n' "${C_DIM}Lynis checks 300+ hardening items and gives your system a Hardening Index (0-100).${C_RST}"
+        offer_install lynis lynis || { pause; return; }
+    fi
+    printf '%s\n' "${C_DIM}Running a full audit - this takes a minute or two...${C_RST}"
+    run_priv "lynis audit system" lynis audit system --quick
+    printf '\n%s\n' "${C_DIM}Full report saved by Lynis itself, typically at /var/log/lynis-report.dat and /var/log/lynis.log${C_RST}"
+    pause
+}
+
+# Baseline sysctl keys this toolkit knows how to audit/harden. Deliberately
+# excludes context-dependent settings like net.ipv4.ip_forward, which routers,
+# Docker hosts and VPN boxes legitimately need enabled - flipping that off
+# under a generic "hardening" banner would break those setups.
+_SYSCTL_HARDENING_KEYS=(
+    "net.ipv4.conf.all.accept_redirects=0"
+    "net.ipv4.conf.default.accept_redirects=0"
+    "net.ipv6.conf.all.accept_redirects=0"
+    "net.ipv4.conf.all.send_redirects=0"
+    "net.ipv4.conf.all.accept_source_route=0"
+    "net.ipv6.conf.all.accept_source_route=0"
+    "net.ipv4.conf.all.rp_filter=1"
+    "net.ipv4.icmp_echo_ignore_broadcasts=1"
+    "net.ipv4.tcp_syncookies=1"
+    "kernel.randomize_va_space=2"
+    "kernel.sysrq=0"
+    "kernel.dmesg_restrict=1"
+    "kernel.kptr_restrict=2"
+    "fs.protected_hardlinks=1"
+    "fs.protected_symlinks=1"
+)
+
+sec_sysctl_hardening() {
+    header "Kernel (sysctl) Hardening"
+    printf ' %-45s %10s %10s\n' "PARAMETER" "CURRENT" "RECOMMENDED"
+    local entry key want current
+    for entry in "${_SYSCTL_HARDENING_KEYS[@]}"; do
+        key="${entry%%=*}"; want="${entry#*=}"
+        current=$(sysctl -n "$key" 2>/dev/null)
+        if [ "$current" = "$want" ]; then
+            printf ' %-45s %10s %10s  %s\n' "$key" "${current:-?}" "$want" "${C_GRN}OK${C_RST}"
+        else
+            printf ' %-45s %10s %10s  %s\n' "$key" "${current:-?}" "$want" "${C_YEL}differs${C_RST}"
+        fi
+    done
+    echo
+    echo " [1] Apply recommended baseline   [2] Revert to previous baseline   [0] Back"
+    local o=""; read -r -p "Select: " o
+    local conf="/etc/sysctl.d/99-techtoolkit-hardening.conf"
+    case "$o" in
+        1)
+            confirm "Write $conf and apply these values now? A backup of any existing file is kept." || { pause; return; }
+            if [ -f "$conf" ]; then
+                run_priv "backup sysctl conf" cp "$conf" "${conf}.bak.$(stamp)"
+            fi
+            {
+                echo "# Written by LinuxTechToolKit - baseline kernel hardening"
+                echo "# Deliberately excludes net.ipv4.ip_forward (context-dependent: routers/Docker/VPN hosts need it)"
+                for entry in "${_SYSCTL_HARDENING_KEYS[@]}"; do echo "${entry/=/ = }"; done
+            } > "/tmp/techtoolkit_sysctl_$$.conf"
+            run_priv "install sysctl conf" cp "/tmp/techtoolkit_sysctl_$$.conf" "$conf"
+            rm -f "/tmp/techtoolkit_sysctl_$$.conf"
+            run_priv "sysctl --system" sysctl --system >/dev/null
+            printf '%s\n' "${C_GRN}Applied. Re-open this menu to confirm the values took effect.${C_RST}"
+            log_action "Applied sysctl hardening baseline"
+            ;;
+        2)
+            local backups
+            backups=$(ls -t "${conf}.bak."* 2>/dev/null)
+            if [ -z "$backups" ]; then
+                printf '%s\n' "${C_YEL}No backup found. If you never applied our baseline, just delete $conf manually.${C_RST}"
+            else
+                local latest; latest=$(head -1 <<< "$backups")
+                confirm "Restore $latest over $conf and reload?" || { pause; return; }
+                run_priv "restore sysctl conf" cp "$latest" "$conf"
+                run_priv "sysctl --system" sysctl --system >/dev/null
+                printf '%s\n' "${C_GRN}Restored.${C_RST}"
+            fi
+            ;;
+    esac
+    pause
+}
+
+# lsm_status_line -- one-line SELinux/AppArmor summary, reused by the quick
+# summary and the dedicated Security Tools item.
+lsm_status_line() {
+    if need_cmd sestatus; then
+        sestatus 2>/dev/null | awk -F': *' '/^SELinux status/{s=$2} /^Current mode/{m=$2} END{printf "SELinux: %s%s\n", s, (m? " ("m")":"")}'
+    elif need_cmd aa-status; then
+        if [ "$IS_ROOT" -eq 1 ] || sudo -n true 2>/dev/null; then
+            if run_priv "aa-status --enabled" aa-status --enabled 2>/dev/null; then
+                local loaded
+                loaded=$(run_priv "aa-status" aa-status --json 2>/dev/null | grep -o '"profiles":[0-9]*' | head -1 | cut -d: -f2)
+                printf 'AppArmor: enabled (%s profiles loaded)\n' "${loaded:-?}"
+            else
+                printf 'AppArmor: installed but not active\n'
+            fi
+        else
+            printf 'AppArmor: installed (run as root/sudo for full status)\n'
+        fi
+    elif [ -r /sys/kernel/security/lsm ]; then
+        printf 'active modules: %s\n' "$(cat /sys/kernel/security/lsm)"
+    else
+        printf 'none detected (no SELinux/AppArmor)\n'
+    fi
+}
+
+sec_lsm_status() {
+    header "SELinux / AppArmor Status"
+    lsm_status_line
+    echo
+    if need_cmd sestatus; then
+        sestatus -v 2>/dev/null
+    elif need_cmd aa-status; then
+        run_priv "aa-status" aa-status
+    else
+        printf '%s\n' "${C_DIM}Neither SELinux (sestatus) nor AppArmor (aa-status) tooling is present.${C_RST}"
+    fi
+    pause
+}
+
 security_menu() {
     while true; do
         header "Security Tools"
@@ -1161,6 +1453,10 @@ security_menu() {
  ${C_YEL}[6]${C_RST}  Users with superuser (UID 0) rights
  ${C_YEL}[7]${C_RST}  Rootkit scan               ${C_DIM}(rkhunter / chkrootkit)${C_RST}
  ${C_YEL}[8]${C_RST}  World-writable files scan
+ ${C_YEL}[9]${C_RST}  Fail2ban status & ban/unban an IP
+ ${C_YEL}[10]${C_RST} Lynis security audit       ${C_DIM}(hardening index 0-100)${C_RST}
+ ${C_YEL}[11]${C_RST} Kernel (sysctl) hardening  ${C_DIM}(view / apply baseline)${C_RST}
+ ${C_YEL}[12]${C_RST} SELinux / AppArmor status
 
  ${C_RED}[0]${C_RST}  Back
 EOF
@@ -1175,6 +1471,10 @@ EOF
             6) sec_uid0_users ;;
             7) sec_rootkit_scan ;;
             8) sec_world_writable ;;
+            9) sec_fail2ban ;;
+            10) sec_lynis_audit ;;
+            11) sec_sysctl_hardening ;;
+            12) sec_lsm_status ;;
             0) return ;;
             *) invalid_choice ;;
         esac
@@ -1346,6 +1646,27 @@ clean_thumbnails() {
     pause
 }
 
+disk_usage_browser() {
+    header "What's Using Disk Space?"
+    local start=""
+    read -r -p "Directory to scan [/]: " start
+    start="${start:-/}"
+    if [ ! -d "$start" ]; then
+        printf '%s\n' "${C_RED}No such directory: $start${C_RST}"
+        pause; return
+    fi
+    if need_cmd ncdu; then
+        ncdu "$start"
+    else
+        printf '%s\n' "${C_DIM}Tip: install 'ncdu' for an interactive drill-down browser. Showing a static top-20 for now.${C_RST}"
+        offer_install ncdu ncdu && { ncdu "$start"; pause; return; }
+        echo
+        printf ' %-70s %10s\n' "PATH" "SIZE"
+        du -xh --max-depth=2 "$start" 2>/dev/null | sort -rh | head -20 | awk '{sz=$1; $1=""; printf " %-70s %10s\n", $0, sz}'
+    fi
+    pause
+}
+
 cleanup_menu() {
     while true; do
         header "Cleanup"
@@ -1357,6 +1678,7 @@ cleanup_menu() {
  ${C_YEL}[5]${C_RST}  Remove old kernels
  ${C_YEL}[6]${C_RST}  Docker / Podman cleanup
  ${C_YEL}[7]${C_RST}  Clear thumbnail cache
+ ${C_YEL}[8]${C_RST}  Find what's using disk space ${C_DIM}(ncdu-style browser)${C_RST}
 
  ${C_RED}[0]${C_RST}  Back
 EOF
@@ -1370,6 +1692,7 @@ EOF
             5) clean_old_kernels ;;
             6) clean_docker ;;
             7) clean_thumbnails ;;
+            8) disk_usage_browser ;;
             0) return ;;
             *) invalid_choice ;;
         esac
@@ -1444,8 +1767,10 @@ power_shutdown() {
 }
 
 power_menu() {
+    local virt; virt=$(detect_virt)
     while true; do
         header "Power & Boot"
+        [ "$virt" != "none" ] && printf '%s\n\n' "${C_DIM}Note: running inside $virt - firmware setup and rescue-mode reboots likely won't apply.${C_RST}"
         cat <<EOF
  ${C_YEL}[1]${C_RST}  Reboot into firmware (BIOS/UEFI) setup
  ${C_YEL}[2]${C_RST}  Boot into rescue / emergency mode
@@ -1538,6 +1863,72 @@ EOF
 }
 
 # ============================================================
+#  SELF-UPDATE
+# ============================================================
+
+# _ver_gt <a> <b> -- true if version a > version b (dotted numeric versions)
+_ver_gt() {
+    [ "$1" = "$2" ] && return 1
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]
+}
+
+check_self_update() {
+    header "Check for Toolkit Updates"
+    if ! need_cmd curl; then
+        printf '%s\n' "${C_YEL}'curl' is required to check for updates.${C_RST}"
+        pause; return
+    fi
+    printf '%s\n' "${C_DIM}Checking github.com/$GITHUB_REPO for a newer release...${C_RST}"
+    local response
+    response=$(curl -fsSL --max-time 10 "https://api.github.com/repos/$GITHUB_REPO/releases/latest" 2>/dev/null)
+    if [ -z "$response" ]; then
+        printf '%s\n' "${C_YEL}Couldn't reach GitHub (no internet, or no release has been published yet).${C_RST}"
+        pause; return
+    fi
+    local latest_tag
+    if need_cmd jq; then
+        latest_tag=$(printf '%s' "$response" | jq -r '.tag_name // empty')
+    else
+        latest_tag=$(printf '%s' "$response" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+    fi
+    if [ -z "$latest_tag" ]; then
+        printf '%s\n' "${C_YEL}No published releases found yet for $GITHUB_REPO.${C_RST}"
+        pause; return
+    fi
+    local latest_ver="${latest_tag#v}"
+    printf ' %-20s: %s\n' "Installed" "$TOOLKIT_VERSION"
+    printf ' %-20s: %s\n' "Latest" "$latest_ver"
+    if ! _ver_gt "$latest_ver" "$TOOLKIT_VERSION"; then
+        printf '\n%s\n' "${C_GRN}You're already on the latest version.${C_RST}"
+        pause; return
+    fi
+    echo
+    printf '%s\n' "${C_GRN}A newer version is available.${C_RST}"
+    local ans=""
+    read -r -p "Download and install it now? [y/N] " ans
+    [[ "$ans" =~ ^[Yy]$ ]] || { pause; return; }
+    local dest="${BASH_SOURCE[0]}"
+    local url="https://raw.githubusercontent.com/$GITHUB_REPO/$latest_tag/linuxtechtoolkit.sh"
+    local tmp; tmp=$(mktemp)
+    if ! curl -fsSL --max-time 20 "$url" -o "$tmp"; then
+        printf '%s\n' "${C_RED}Download failed.${C_RST}"
+        rm -f "$tmp"; pause; return
+    fi
+    if ! bash -n "$tmp"; then
+        printf '%s\n' "${C_RED}Downloaded file failed a syntax check - not installed. Nothing was changed.${C_RST}"
+        rm -f "$tmp"; pause; return
+    fi
+    if run_priv "self-update install" cp "$tmp" "$dest" && run_priv "self-update chmod" chmod +x "$dest"; then
+        printf '%s\n' "${C_GRN}Updated to $latest_ver. Restart the toolkit to use the new version.${C_RST}"
+        log_action "Self-updated to $latest_ver"
+    else
+        printf '%s\n' "${C_RED}Couldn't write to $dest - check permissions.${C_RST}"
+    fi
+    rm -f "$tmp"
+    pause
+}
+
+# ============================================================
 #  MAIN MENU
 # ============================================================
 
@@ -1555,6 +1946,7 @@ main_menu() {
  ${C_YEL}[8]${C_RST}  Power & Boot
  ${C_YEL}[9]${C_RST}  Live System Monitor
  ${C_YEL}[10]${C_RST} Open Reports Folder
+ ${C_YEL}[11]${C_RST} Check for Toolkit Updates    ${C_DIM}(v$TOOLKIT_VERSION)${C_RST}
 
  ${C_RED}[0]${C_RST}  Exit
 EOF
@@ -1571,6 +1963,7 @@ EOF
             8) power_menu ;;
             9) run_live_monitor ;;
             10) open_path "$REPORT_DIR" ;;
+            11) check_self_update ;;
             0) log_action "Toolkit exited"; clear_screen; exit 0 ;;
             *) invalid_choice ;;
         esac
@@ -1580,6 +1973,51 @@ EOF
 # ============================================================
 #  ENTRY POINT
 # ============================================================
+
+print_usage() {
+    cat <<EOF
+Linux Technician Toolkit PRO v$TOOLKIT_VERSION
+
+Usage: $(basename "${BASH_SOURCE[0]}") [option]
+
+With no option, launches the interactive menu.
+
+Options:
+  --quick-summary   Print the quick system summary and exit (scriptable/cron-friendly)
+  --check-updates   Check GitHub for a newer release and exit
+  --version         Print the toolkit version and exit
+  --help            Show this help and exit
+EOF
+}
+
+case "${1:-}" in
+    --version)
+        printf 'linuxtechtoolkit.sh v%s\n' "$TOOLKIT_VERSION"
+        exit 0
+        ;;
+    --help|-h)
+        print_usage
+        exit 0
+        ;;
+    --quick-summary)
+        detect_distro
+        print_quick_summary
+        exit 0
+        ;;
+    --check-updates)
+        detect_distro
+        mkdir -p "$REPORT_DIR" 2>/dev/null
+        check_self_update
+        exit 0
+        ;;
+    "")
+        ;;
+    *)
+        printf 'Unknown option: %s\n\n' "$1" >&2
+        print_usage >&2
+        exit 1
+        ;;
+esac
 
 detect_distro
 mkdir -p "$REPORT_DIR" 2>/dev/null
