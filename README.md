@@ -7,6 +7,7 @@ No installation, no dependencies beyond bash and standard coreutils. Just downlo
 ![Platform](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)
 ![Language](https://img.shields.io/badge/language-Bash-4EAA25?logo=gnubash&logoColor=white)
 ![Distros](https://img.shields.io/badge/distros-apt%20%7C%20dnf%20%7C%20pacman%20%7C%20zypper%20%7C%20apk-blue)
+![Menus](https://img.shields.io/badge/menus-EN%20%7C%20DE-6f42c1)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
@@ -21,6 +22,7 @@ Linux doesn't work that way. `sudo` is granted per-command, not per-process, so 
 
 ## ✨ Features
 
+- **Multi-language menus.** On launch, pick English or Deutsch; every menu, item label, and navigation prompt (Back/Exit/Press Enter/confirmation) is shown in that language for the rest of the session.
 - **Distro-aware.** Detects your package manager (`apt`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) on startup and every package-related tool adapts automatically — no per-distro forks to maintain.
 - **Colored, categorized menus.** Nine sections keep 90+ tools easy to find.
 - **Safety prompts.** Anything destructive asks you to type `YES` before running.
@@ -62,6 +64,21 @@ Temp files (`/tmp` + `~/.cache`), package cache/autoremove, systemd journal vacu
 
 ### 8. Power & Boot
 Reboot into firmware (BIOS/UEFI) setup, boot into rescue/emergency mode, set the default boot target (graphical vs. multi-user — the closest Linux equivalent to toggling Windows Safe Mode), suspend/hibernate, restart, and shut down.
+
+## 🌐 Languages
+
+The first screen asks you to pick a language:
+
+| # | Language |
+|---|---|
+| 1 | English |
+| 2 | Deutsch |
+
+The choice applies for the rest of that session — every menu title, item label, and navigation prompt (`Back`/`Exit`/`Press Enter to continue`/confirmations) is shown in that language. In German, the confirmation word for destructive actions is `JA` instead of `YES`.
+
+**Scope, deliberately:** only the toolkit's own menus and navigation chrome are translated — the same choice [WindowsTechToolKit](https://github.com/) makes for its three languages. The screen you land on after picking a menu item (its title, explanatory text, and anything printed by a native Linux tool like `systemctl`, `journalctl`, or `ip a`) stays in English. Translating every one of the hundreds of scattered per-action messages would be a much larger and more error-prone effort for comparatively little benefit, given that output is dominated by native command output anyway.
+
+`--quick-summary`, `--check-updates`, `--version`, and `--help` skip the language prompt entirely and always run in English, since they're meant for non-interactive/scripted use.
 
 ## 🚀 Getting Started
 

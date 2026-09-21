@@ -36,7 +36,7 @@ fi
 # ============================================================
 #  GLOBALS
 # ============================================================
-TOOLKIT_VERSION="1.1.0"
+TOOLKIT_VERSION="1.2.0"
 GITHUB_REPO="itsmrroot/LinuxTechToolKit-"
 REPORT_DIR="${HOME}/TechToolkit_Reports"
 LOG_FILE="${REPORT_DIR}/toolkit_log.txt"
@@ -45,8 +45,298 @@ IS_ROOT=0
 PKG_MANAGER=""
 DISTRO_NAME="Unknown"
 DISTRO_ID="unknown"
+LANG_CHOICE="EN"
 
 mkdir -p "$REPORT_DIR" 2>/dev/null
+
+# ============================================================
+#  TRANSLATIONS (menu chrome: titles, item labels, navigation prompts)
+# ============================================================
+# Scope, deliberately: the menu structure and common navigation prompts are
+# fully bilingual. Deep per-action output (diagnostic text, confirmation
+# messages inside individual tools, and native command output like
+# `systemctl`/`journalctl`) stays in English - translating every one of the
+# hundreds of scattered messages would be a much larger, more error-prone
+# effort for comparatively little benefit, since that output is dominated by
+# native Linux tool output anyway. This mirrors WindowsTechToolKit's own
+# scoping: only the toolkit's own menus/prompts are translated.
+
+declare -A T_EN=(
+    [SELECT]="Select an option: "
+    [BACK]="Back"
+    [EXIT]="Exit"
+    [PRESS_ENTER]="Press Enter to continue..."
+    [INVALID]="Invalid option. Try again."
+    [WARNING]="WARNING:"
+    [CONFIRM_WORD]="YES"
+    [CONFIRM_PROMPT]="Type %s to continue:"
+    [CANCELLED]="Cancelled."
+    [HOST_LABEL]="Host:"
+    [USER_LABEL]="User:"
+    [STDUSER_TAG]=" [standard user - sudo used per action]"
+
+    [MAIN_TITLE]="Main Menu"
+    [MAIN_1]="Admin Consoles"
+    [MAIN_2]="System Info & Reports"
+    [MAIN_3]="Repair & Maintenance"
+    [MAIN_4]="Network Tools"
+    [MAIN_5]="Package Management"
+    [MAIN_6]="Security Tools"
+    [MAIN_7]="Cleanup"
+    [MAIN_8]="Power & Boot"
+    [MAIN_9]="Live System Monitor"
+    [MAIN_10]="Open Reports Folder"
+    [MAIN_11]="Check for Toolkit Updates"
+
+    [SI_TITLE]="System Info & Reports"
+    [SI_1]="Quick system summary"
+    [SI_2]="Full system report          (saved as .txt)"
+    [SI_3]="Battery health report       (laptops)"
+    [SI_4]="Installed packages list     (saved as .txt)"
+    [SI_5]="Disk health (SMART)"
+    [SI_6]="Critical errors, last 24h"
+    [SI_7]="Failed systemd units"
+    [SI_8]="Boot time analysis"
+    [SI_9]="Disk encryption (LUKS) status"
+
+    [RM_TITLE]="Repair & Maintenance"
+    [RM_VIRT_NOTE]="Note: running inside %s - bootloader/initramfs/DKMS tools below likely won't apply."
+    [RM_1]="Fix broken packages          (dpkg --configure -a / fix-broken)"
+    [RM_2]="Full system update"
+    [RM_3]="Rebuild initramfs / initrd"
+    [RM_4]="Update bootloader (GRUB) config"
+    [RM_5]="Schedule filesystem check on next boot"
+    [RM_6]="Disk SMART self-test"
+    [RM_7]="Reset failed systemd units"
+    [RM_8]="Restart a specific service"
+    [RM_9]="Rebuild DKMS kernel modules"
+    [RM_10]="Create system snapshot / restore point"
+    [RM_11]="Backup key config files      (/etc, crontabs, package list)"
+    [RM_12]="Extract a config backup for review"
+
+    [NT_TITLE]="Network Tools"
+    [NT_1]="One-click diagnosis          (router / internet / DNS)"
+    [NT_2]="IP configuration"
+    [NT_3]="Public IP"
+    [NT_4]="Flush DNS cache"
+    [NT_5]="Release and renew IP"
+    [NT_6]="Ping"
+    [NT_7]="Traceroute"
+    [NT_8]="Saved Wi-Fi networks"
+    [NT_9]="Active connections           (saved to a file)"
+    [NT_10]="Full network reset"
+    [NT_11]="Show saved Wi-Fi passwords"
+    [NT_12]="Internet speed test"
+    [NT_13]="Configure IP address         (DHCP / static)"
+    [NT_14]="Firewall status"
+
+    [ST_TITLE]="Security Tools"
+    [ST_1]="Firewall enable / disable"
+    [ST_2]="Listening ports & owning processes"
+    [ST_3]="Check for pending updates"
+    [ST_4]="SSH configuration audit"
+    [ST_5]="Failed login attempts"
+    [ST_6]="Users with superuser (UID 0) rights"
+    [ST_7]="Rootkit scan               (rkhunter / chkrootkit)"
+    [ST_8]="World-writable files scan"
+    [ST_9]="Fail2ban status & ban/unban an IP"
+    [ST_10]="Lynis security audit       (hardening index 0-100)"
+    [ST_11]="Kernel (sysctl) hardening  (view / apply baseline)"
+    [ST_12]="SELinux / AppArmor status"
+
+    [PM_TITLE]="Package Management"
+    [PM_ON]="on"
+    [PM_1]="Check for updates"
+    [PM_2]="Update & upgrade everything"
+    [PM_3]="Clean package cache / autoremove"
+    [PM_4]="Install a package"
+    [PM_5]="Search for a package"
+    [PM_6]="Remove a package"
+    [PM_7]="List explicitly installed packages (top-level, not deps)"
+
+    [CL_TITLE]="Cleanup"
+    [CL_1]="Clean temp files             (/tmp + ~/.cache)"
+    [CL_2]="Package cache / autoremove"
+    [CL_3]="Vacuum systemd journal"
+    [CL_4]="Empty trash"
+    [CL_5]="Remove old kernels"
+    [CL_6]="Docker / Podman cleanup"
+    [CL_7]="Clear thumbnail cache"
+    [CL_8]="Find what's using disk space (ncdu-style browser)"
+
+    [PW_TITLE]="Power & Boot"
+    [PW_VIRT_NOTE]="Note: running inside %s - firmware setup and rescue-mode reboots likely won't apply."
+    [PW_1]="Reboot into firmware (BIOS/UEFI) setup"
+    [PW_2]="Boot into rescue / emergency mode"
+    [PW_3]="Set default boot target             (GUI on/off)"
+    [PW_4]="Suspend / hibernate"
+    [PW_5]="Restart"
+    [PW_6]="Shut down"
+
+    [AC_TITLE]="Admin Consoles"
+    [AC_1]="Root shell                   (sudo -i)"
+    [AC_2]="Service manager (systemctl status, interactive)"
+    [AC_3]="Live log viewer              (journalctl -f)"
+    [AC_4]="User management              (list / add / passwd)"
+    [AC_5]="Process manager              (htop/top)"
+    [AC_6]="Disk manager                 (lsblk / GNOME Disks if available)"
+    [AC_7]="Cron / scheduled tasks       (crontab -l, systemd timers)"
+    [AC_8]="Package manager GUI          (if installed)"
+    [AC_9]="Network manager TUI/GUI      (nmtui / nm-connection-editor)"
+)
+
+declare -A T_DE=(
+    [SELECT]="Option auswählen: "
+    [BACK]="Zurück"
+    [EXIT]="Beenden"
+    [PRESS_ENTER]="Weiter mit der Eingabetaste..."
+    [INVALID]="Ungültige Option. Bitte erneut versuchen."
+    [WARNING]="WARNUNG:"
+    [CONFIRM_WORD]="JA"
+    [CONFIRM_PROMPT]="Zum Fortfahren %s eingeben:"
+    [CANCELLED]="Abgebrochen."
+    [HOST_LABEL]="Host:"
+    [USER_LABEL]="Benutzer:"
+    [STDUSER_TAG]=" [Standardbenutzer - sudo je Aktion]"
+
+    [MAIN_TITLE]="Hauptmenü"
+    [MAIN_1]="Admin-Konsolen"
+    [MAIN_2]="Systeminfo & Berichte"
+    [MAIN_3]="Reparatur & Wartung"
+    [MAIN_4]="Netzwerk-Tools"
+    [MAIN_5]="Paketverwaltung"
+    [MAIN_6]="Sicherheits-Tools"
+    [MAIN_7]="Bereinigung"
+    [MAIN_8]="Energie & Start"
+    [MAIN_9]="Live-Systemmonitor"
+    [MAIN_10]="Berichtsordner öffnen"
+    [MAIN_11]="Nach Toolkit-Updates suchen"
+
+    [SI_TITLE]="Systeminfo & Berichte"
+    [SI_1]="Kurze Systemübersicht"
+    [SI_2]="Vollständiger Systembericht  (als .txt gespeichert)"
+    [SI_3]="Akku-Gesundheitsbericht      (Laptops)"
+    [SI_4]="Liste installierter Pakete   (als .txt gespeichert)"
+    [SI_5]="Festplattengesundheit (SMART)"
+    [SI_6]="Kritische Fehler, letzte 24h"
+    [SI_7]="Fehlgeschlagene systemd-Units"
+    [SI_8]="Startzeitanalyse"
+    [SI_9]="Festplattenverschlüsselung (LUKS)-Status"
+
+    [RM_TITLE]="Reparatur & Wartung"
+    [RM_VIRT_NOTE]="Hinweis: läuft in %s - Bootloader-/initramfs-/DKMS-Tools unten greifen vermutlich nicht."
+    [RM_1]="Defekte Pakete reparieren    (dpkg --configure -a / fix-broken)"
+    [RM_2]="Vollständiges Systemupdate"
+    [RM_3]="initramfs / initrd neu erstellen"
+    [RM_4]="Bootloader-Konfiguration (GRUB) aktualisieren"
+    [RM_5]="Dateisystemprüfung beim nächsten Start planen"
+    [RM_6]="SMART-Selbsttest der Festplatte"
+    [RM_7]="Fehlgeschlagene systemd-Units zurücksetzen"
+    [RM_8]="Einen bestimmten Dienst neu starten"
+    [RM_9]="DKMS-Kernelmodule neu erstellen"
+    [RM_10]="Systemschnappschuss / Wiederherstellungspunkt erstellen"
+    [RM_11]="Wichtige Konfigurationsdateien sichern   (/etc, Crontabs, Paketliste)"
+    [RM_12]="Konfigurationssicherung zur Prüfung entpacken"
+
+    [NT_TITLE]="Netzwerk-Tools"
+    [NT_1]="Ein-Klick-Diagnose          (Router / Internet / DNS)"
+    [NT_2]="IP-Konfiguration"
+    [NT_3]="Öffentliche IP"
+    [NT_4]="DNS-Cache leeren"
+    [NT_5]="IP freigeben und erneuern"
+    [NT_6]="Ping"
+    [NT_7]="Traceroute"
+    [NT_8]="Gespeicherte WLAN-Netzwerke"
+    [NT_9]="Aktive Verbindungen         (in Datei gespeichert)"
+    [NT_10]="Vollständiger Netzwerk-Reset"
+    [NT_11]="Gespeicherte WLAN-Passwörter anzeigen"
+    [NT_12]="Internet-Geschwindigkeitstest"
+    [NT_13]="IP-Adresse konfigurieren    (DHCP / statisch)"
+    [NT_14]="Firewall-Status"
+
+    [ST_TITLE]="Sicherheits-Tools"
+    [ST_1]="Firewall aktivieren / deaktivieren"
+    [ST_2]="Offene Ports & zugehörige Prozesse"
+    [ST_3]="Nach ausstehenden Updates suchen"
+    [ST_4]="SSH-Konfigurationsprüfung"
+    [ST_5]="Fehlgeschlagene Anmeldeversuche"
+    [ST_6]="Benutzer mit Superuser-Rechten (UID 0)"
+    [ST_7]="Rootkit-Scan                (rkhunter / chkrootkit)"
+    [ST_8]="Scan nach world-writable Dateien"
+    [ST_9]="Fail2ban-Status & IP sperren/entsperren"
+    [ST_10]="Lynis-Sicherheitsaudit      (Härtungsindex 0-100)"
+    [ST_11]="Kernel-Härtung (sysctl)     (anzeigen / Basis anwenden)"
+    [ST_12]="SELinux-/AppArmor-Status"
+
+    [PM_TITLE]="Paketverwaltung"
+    [PM_ON]="auf"
+    [PM_1]="Nach Updates suchen"
+    [PM_2]="Alles aktualisieren"
+    [PM_3]="Paket-Cache leeren / Autoremove"
+    [PM_4]="Ein Paket installieren"
+    [PM_5]="Nach einem Paket suchen"
+    [PM_6]="Ein Paket entfernen"
+    [PM_7]="Explizit installierte Pakete auflisten (nicht Abhängigkeiten)"
+
+    [CL_TITLE]="Bereinigung"
+    [CL_1]="Temporäre Dateien bereinigen (/tmp + ~/.cache)"
+    [CL_2]="Paket-Cache / Autoremove"
+    [CL_3]="systemd-Journal bereinigen"
+    [CL_4]="Papierkorb leeren"
+    [CL_5]="Alte Kernel entfernen"
+    [CL_6]="Docker-/Podman-Bereinigung"
+    [CL_7]="Vorschaubilder-Cache leeren"
+    [CL_8]="Speicherplatzbelegung analysieren (ncdu-ähnlicher Browser)"
+
+    [PW_TITLE]="Energie & Start"
+    [PW_VIRT_NOTE]="Hinweis: läuft in %s - Firmware-Setup und Rescue-Modus-Neustarts greifen vermutlich nicht."
+    [PW_1]="Neustart ins Firmware-Setup (BIOS/UEFI)"
+    [PW_2]="Start im Rescue-/Emergency-Modus"
+    [PW_3]="Standard-Boot-Ziel festlegen        (GUI an/aus)"
+    [PW_4]="Standby / Ruhezustand"
+    [PW_5]="Neu starten"
+    [PW_6]="Herunterfahren"
+
+    [AC_TITLE]="Admin-Konsolen"
+    [AC_1]="Root-Shell                   (sudo -i)"
+    [AC_2]="Dienste-Manager (systemctl status, interaktiv)"
+    [AC_3]="Live-Log-Anzeige             (journalctl -f)"
+    [AC_4]="Benutzerverwaltung           (auflisten / hinzufügen / Passwort)"
+    [AC_5]="Prozess-Manager              (htop/top)"
+    [AC_6]="Datenträgerverwaltung        (lsblk / GNOME Disks falls vorhanden)"
+    [AC_7]="Cron / geplante Aufgaben     (crontab -l, systemd-Timer)"
+    [AC_8]="Paketverwaltungs-GUI         (falls installiert)"
+    [AC_9]="Netzwerkmanager TUI/GUI      (nmtui / nm-connection-editor)"
+)
+
+# t <key> -- looks up KEY in the active language table, falling back to
+# English, then to the raw key itself if somehow missing from both.
+t() {
+    local key="$1" val=""
+    if [ "$LANG_CHOICE" = "DE" ]; then val="${T_DE[$key]:-}"; fi
+    if [ -z "$val" ]; then val="${T_EN[$key]:-$key}"; fi
+    printf '%s' "$val"
+}
+
+# select_language -- shown once at startup for the interactive menu path only
+select_language() {
+    while true; do
+        clear_screen
+        printf '%s\n' "${C_CYAN}══════════════════════════════════════════════════════════════════${C_RST}"
+        printf '%s\n' "${C_WHT}${C_BOLD}                 LINUX TECHNICIAN TOOLKIT  PRO${C_RST}"
+        printf '%s\n\n' "${C_CYAN}══════════════════════════════════════════════════════════════════${C_RST}"
+        printf ' %s  Choose your language / Sprache wählen%s\n\n' "${C_YEL}" "${C_RST}"
+        printf ' %s[1]%s  English\n' "${C_YEL}" "${C_RST}"
+        printf ' %s[2]%s  Deutsch\n\n' "${C_YEL}" "${C_RST}"
+        local choice=""
+        read -r -p " Select / Auswahl: " choice || { clear_screen; exit 0; }
+        case "$choice" in
+            1) LANG_CHOICE="EN"; return ;;
+            2) LANG_CHOICE="DE"; return ;;
+            *) printf '%s\n' "${C_RED}Invalid option. / Ungültige Option.${C_RST}"; sleep 1 ;;
+        esac
+    done
+}
 
 # ============================================================
 #  HELPERS
@@ -59,24 +349,26 @@ log_action() {
 stamp() { date '+%Y-%m-%d_%H%M%S'; }
 
 pause() {
-    printf '\n%s' "${C_DIM}Press Enter to continue...${C_RST} "
+    printf '\n%s' "${C_DIM}$(t PRESS_ENTER)${C_RST} "
     read -r _
 }
 
 invalid_choice() {
-    printf '%s\n' "${C_RED}Invalid option. Try again.${C_RST}"
+    printf '%s\n' "${C_RED}$(t INVALID)${C_RST}"
     sleep 1
 }
 
-# confirm "message" -> returns 0 if user typed YES, 1 otherwise
+# confirm "message" -> returns 0 if user typed the language's confirm word, 1 otherwise
 confirm() {
-    printf '\n%s\n' "${C_RED}WARNING:${C_RST} $1"
+    printf '\n%s\n' "${C_RED}$(t WARNING)${C_RST} $1"
+    local word; word=$(t CONFIRM_WORD)
+    local prompt; prompt=$(printf "$(t CONFIRM_PROMPT)" "$word")
     local ans=""
-    read -r -p "Type YES to continue: " ans
-    if [ "$ans" = "YES" ]; then
+    read -r -p "$prompt " ans
+    if [ "$ans" = "$word" ]; then
         return 0
     fi
-    printf '%s\n' "${C_DIM}Cancelled.${C_RST}"
+    printf '%s\n' "${C_DIM}$(t CANCELLED)${C_RST}"
     sleep 1
     return 1
 }
@@ -87,11 +379,11 @@ header() {
     printf '%s\n' "${C_WHT}${C_BOLD}                 LINUX TECHNICIAN TOOLKIT  PRO${C_RST}"
     printf '%s\n' "${C_DIM}                      powered by Bashar Salmo${C_RST}"
     printf '%s\n' "${C_CYAN}══════════════════════════════════════════════════════════════════${C_RST}"
-    printf '%s' "${C_DIM}  Host: $(get_hostname)   User: $(whoami)"
+    printf '%s' "${C_DIM}  $(t HOST_LABEL) $(get_hostname)   $(t USER_LABEL) $(whoami)"
     if [ "$IS_ROOT" -eq 1 ]; then
         printf '%s' "${C_GRN} [root]${C_DIM}"
     else
-        printf '%s' "${C_YEL} [standard user - sudo used per action]${C_DIM}"
+        printf '%s' "${C_YEL}$(t STDUSER_TAG)${C_DIM}"
     fi
     printf '   %s\n' "$(date '+%Y-%m-%d %H:%M')${C_RST}"
     printf '%s\n\n' "${C_YEL}  >> $1${C_RST}"
@@ -608,22 +900,22 @@ info_encryption_status() {
 
 sysinfo_menu() {
     while true; do
-        header "System Info & Reports"
+        header "$(t SI_TITLE)"
         cat <<EOF
- ${C_YEL}[1]${C_RST}  Quick system summary
- ${C_YEL}[2]${C_RST}  Full system report          ${C_DIM}(saved as .txt)${C_RST}
- ${C_YEL}[3]${C_RST}  Battery health report       ${C_DIM}(laptops)${C_RST}
- ${C_YEL}[4]${C_RST}  Installed packages list     ${C_DIM}(saved as .txt)${C_RST}
- ${C_YEL}[5]${C_RST}  Disk health (SMART)
- ${C_YEL}[6]${C_RST}  Critical errors, last 24h
- ${C_YEL}[7]${C_RST}  Failed systemd units
- ${C_YEL}[8]${C_RST}  Boot time analysis
- ${C_YEL}[9]${C_RST}  Disk encryption (LUKS) status
+ ${C_YEL}[1]${C_RST}  $(t SI_1)
+ ${C_YEL}[2]${C_RST}  $(t SI_2)
+ ${C_YEL}[3]${C_RST}  $(t SI_3)
+ ${C_YEL}[4]${C_RST}  $(t SI_4)
+ ${C_YEL}[5]${C_RST}  $(t SI_5)
+ ${C_YEL}[6]${C_RST}  $(t SI_6)
+ ${C_YEL}[7]${C_RST}  $(t SI_7)
+ ${C_YEL}[8]${C_RST}  $(t SI_8)
+ ${C_YEL}[9]${C_RST}  $(t SI_9)
 
- ${C_RED}[0]${C_RST}  Back
+ ${C_RED}[0]${C_RST}  $(t BACK)
 EOF
         local opt=""
-        read -r -p " Select an option: " opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
+        read -r -p " $(t SELECT)" opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
         case "$opt" in
             1) info_quick ;;
             2) info_full_report ;;
@@ -841,26 +1133,26 @@ repair_restore_config_browse() {
 repair_menu() {
     local virt; virt=$(detect_virt)
     while true; do
-        header "Repair & Maintenance"
-        [ "$virt" != "none" ] && printf '%s\n\n' "${C_DIM}Note: running inside $virt - bootloader/initramfs/DKMS tools below likely won't apply.${C_RST}"
+        header "$(t RM_TITLE)"
+        [ "$virt" != "none" ] && printf "${C_DIM}$(t RM_VIRT_NOTE)${C_RST}\\n\\n" "$virt"
         cat <<EOF
- ${C_YEL}[1]${C_RST}  Fix broken packages          ${C_DIM}(dpkg --configure -a / fix-broken)${C_RST}
- ${C_YEL}[2]${C_RST}  Full system update           ${C_DIM}($PKG_MANAGER)${C_RST}
- ${C_YEL}[3]${C_RST}  Rebuild initramfs / initrd
- ${C_YEL}[4]${C_RST}  Update bootloader (GRUB) config
- ${C_YEL}[5]${C_RST}  Schedule filesystem check on next boot
- ${C_YEL}[6]${C_RST}  Disk SMART self-test
- ${C_YEL}[7]${C_RST}  Reset failed systemd units
- ${C_YEL}[8]${C_RST}  Restart a specific service
- ${C_YEL}[9]${C_RST}  Rebuild DKMS kernel modules
- ${C_YEL}[10]${C_RST} Create system snapshot / restore point
- ${C_YEL}[11]${C_RST} Backup key config files      ${C_DIM}(/etc, crontabs, package list)${C_RST}
- ${C_YEL}[12]${C_RST} Extract a config backup for review
+ ${C_YEL}[1]${C_RST}  $(t RM_1)
+ ${C_YEL}[2]${C_RST}  $(t RM_2)           ${C_DIM}($PKG_MANAGER)${C_RST}
+ ${C_YEL}[3]${C_RST}  $(t RM_3)
+ ${C_YEL}[4]${C_RST}  $(t RM_4)
+ ${C_YEL}[5]${C_RST}  $(t RM_5)
+ ${C_YEL}[6]${C_RST}  $(t RM_6)
+ ${C_YEL}[7]${C_RST}  $(t RM_7)
+ ${C_YEL}[8]${C_RST}  $(t RM_8)
+ ${C_YEL}[9]${C_RST}  $(t RM_9)
+ ${C_YEL}[10]${C_RST} $(t RM_10)
+ ${C_YEL}[11]${C_RST} $(t RM_11)
+ ${C_YEL}[12]${C_RST} $(t RM_12)
 
- ${C_RED}[0]${C_RST}  Back
+ ${C_RED}[0]${C_RST}  $(t BACK)
 EOF
         local opt=""
-        read -r -p " Select an option: " opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
+        read -r -p " $(t SELECT)" opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
         case "$opt" in
             1) repair_fix_broken ;;
             2) repair_update_all ;;
@@ -1116,27 +1408,27 @@ net_firewall_status() {
 
 network_menu() {
     while true; do
-        header "Network Tools"
+        header "$(t NT_TITLE)"
         cat <<EOF
- ${C_YEL}[1]${C_RST}  One-click diagnosis          ${C_DIM}(router / internet / DNS)${C_RST}
- ${C_YEL}[2]${C_RST}  IP configuration
- ${C_YEL}[3]${C_RST}  Public IP
- ${C_YEL}[4]${C_RST}  Flush DNS cache
- ${C_YEL}[5]${C_RST}  Release and renew IP
- ${C_YEL}[6]${C_RST}  Ping
- ${C_YEL}[7]${C_RST}  Traceroute
- ${C_YEL}[8]${C_RST}  Saved Wi-Fi networks
- ${C_YEL}[9]${C_RST}  Active connections           ${C_DIM}(saved to a file)${C_RST}
- ${C_YEL}[10]${C_RST} Full network reset
- ${C_YEL}[11]${C_RST} Show saved Wi-Fi passwords
- ${C_YEL}[12]${C_RST} Internet speed test
- ${C_YEL}[13]${C_RST} Configure IP address         ${C_DIM}(DHCP / static)${C_RST}
- ${C_YEL}[14]${C_RST} Firewall status
+ ${C_YEL}[1]${C_RST}  $(t NT_1)
+ ${C_YEL}[2]${C_RST}  $(t NT_2)
+ ${C_YEL}[3]${C_RST}  $(t NT_3)
+ ${C_YEL}[4]${C_RST}  $(t NT_4)
+ ${C_YEL}[5]${C_RST}  $(t NT_5)
+ ${C_YEL}[6]${C_RST}  $(t NT_6)
+ ${C_YEL}[7]${C_RST}  $(t NT_7)
+ ${C_YEL}[8]${C_RST}  $(t NT_8)
+ ${C_YEL}[9]${C_RST}  $(t NT_9)
+ ${C_YEL}[10]${C_RST} $(t NT_10)
+ ${C_YEL}[11]${C_RST} $(t NT_11)
+ ${C_YEL}[12]${C_RST} $(t NT_12)
+ ${C_YEL}[13]${C_RST} $(t NT_13)
+ ${C_YEL}[14]${C_RST} $(t NT_14)
 
- ${C_RED}[0]${C_RST}  Back
+ ${C_RED}[0]${C_RST}  $(t BACK)
 EOF
         local opt=""
-        read -r -p " Select an option: " opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
+        read -r -p " $(t SELECT)" opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
         case "$opt" in
             1) net_diag ;;
             2) net_ipconfig ;;
@@ -1443,25 +1735,25 @@ sec_lsm_status() {
 
 security_menu() {
     while true; do
-        header "Security Tools"
+        header "$(t ST_TITLE)"
         cat <<EOF
- ${C_YEL}[1]${C_RST}  Firewall enable / disable
- ${C_YEL}[2]${C_RST}  Listening ports & owning processes
- ${C_YEL}[3]${C_RST}  Check for pending updates
- ${C_YEL}[4]${C_RST}  SSH configuration audit
- ${C_YEL}[5]${C_RST}  Failed login attempts
- ${C_YEL}[6]${C_RST}  Users with superuser (UID 0) rights
- ${C_YEL}[7]${C_RST}  Rootkit scan               ${C_DIM}(rkhunter / chkrootkit)${C_RST}
- ${C_YEL}[8]${C_RST}  World-writable files scan
- ${C_YEL}[9]${C_RST}  Fail2ban status & ban/unban an IP
- ${C_YEL}[10]${C_RST} Lynis security audit       ${C_DIM}(hardening index 0-100)${C_RST}
- ${C_YEL}[11]${C_RST} Kernel (sysctl) hardening  ${C_DIM}(view / apply baseline)${C_RST}
- ${C_YEL}[12]${C_RST} SELinux / AppArmor status
+ ${C_YEL}[1]${C_RST}  $(t ST_1)
+ ${C_YEL}[2]${C_RST}  $(t ST_2)
+ ${C_YEL}[3]${C_RST}  $(t ST_3)
+ ${C_YEL}[4]${C_RST}  $(t ST_4)
+ ${C_YEL}[5]${C_RST}  $(t ST_5)
+ ${C_YEL}[6]${C_RST}  $(t ST_6)
+ ${C_YEL}[7]${C_RST}  $(t ST_7)
+ ${C_YEL}[8]${C_RST}  $(t ST_8)
+ ${C_YEL}[9]${C_RST}  $(t ST_9)
+ ${C_YEL}[10]${C_RST} $(t ST_10)
+ ${C_YEL}[11]${C_RST} $(t ST_11)
+ ${C_YEL}[12]${C_RST} $(t ST_12)
 
- ${C_RED}[0]${C_RST}  Back
+ ${C_RED}[0]${C_RST}  $(t BACK)
 EOF
         local opt=""
-        read -r -p " Select an option: " opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
+        read -r -p " $(t SELECT)" opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
         case "$opt" in
             1) sec_firewall_toggle ;;
             2) sec_open_ports ;;
@@ -1487,20 +1779,20 @@ EOF
 
 pkgmgr_menu() {
     while true; do
-        header "Package Management ($PKG_MANAGER on $DISTRO_NAME)"
+        header "$(t PM_TITLE) ($PKG_MANAGER $(t PM_ON) $DISTRO_NAME)"
         cat <<EOF
- ${C_YEL}[1]${C_RST}  Check for updates
- ${C_YEL}[2]${C_RST}  Update & upgrade everything
- ${C_YEL}[3]${C_RST}  Clean package cache / autoremove
- ${C_YEL}[4]${C_RST}  Install a package
- ${C_YEL}[5]${C_RST}  Search for a package
- ${C_YEL}[6]${C_RST}  Remove a package
- ${C_YEL}[7]${C_RST}  List explicitly installed packages ${C_DIM}(top-level, not deps)${C_RST}
+ ${C_YEL}[1]${C_RST}  $(t PM_1)
+ ${C_YEL}[2]${C_RST}  $(t PM_2)
+ ${C_YEL}[3]${C_RST}  $(t PM_3)
+ ${C_YEL}[4]${C_RST}  $(t PM_4)
+ ${C_YEL}[5]${C_RST}  $(t PM_5)
+ ${C_YEL}[6]${C_RST}  $(t PM_6)
+ ${C_YEL}[7]${C_RST}  $(t PM_7)
 
- ${C_RED}[0]${C_RST}  Back
+ ${C_RED}[0]${C_RST}  $(t BACK)
 EOF
         local opt=""
-        read -r -p " Select an option: " opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
+        read -r -p " $(t SELECT)" opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
         case "$opt" in
             1) header "Checking for Updates"; pkg_update_check; pause ;;
             2) repair_update_all ;;
@@ -1669,21 +1961,21 @@ disk_usage_browser() {
 
 cleanup_menu() {
     while true; do
-        header "Cleanup"
+        header "$(t CL_TITLE)"
         cat <<EOF
- ${C_YEL}[1]${C_RST}  Clean temp files             ${C_DIM}(/tmp + ~/.cache)${C_RST}
- ${C_YEL}[2]${C_RST}  Package cache / autoremove   ${C_DIM}($PKG_MANAGER)${C_RST}
- ${C_YEL}[3]${C_RST}  Vacuum systemd journal
- ${C_YEL}[4]${C_RST}  Empty trash
- ${C_YEL}[5]${C_RST}  Remove old kernels
- ${C_YEL}[6]${C_RST}  Docker / Podman cleanup
- ${C_YEL}[7]${C_RST}  Clear thumbnail cache
- ${C_YEL}[8]${C_RST}  Find what's using disk space ${C_DIM}(ncdu-style browser)${C_RST}
+ ${C_YEL}[1]${C_RST}  $(t CL_1)
+ ${C_YEL}[2]${C_RST}  $(t CL_2)   ${C_DIM}($PKG_MANAGER)${C_RST}
+ ${C_YEL}[3]${C_RST}  $(t CL_3)
+ ${C_YEL}[4]${C_RST}  $(t CL_4)
+ ${C_YEL}[5]${C_RST}  $(t CL_5)
+ ${C_YEL}[6]${C_RST}  $(t CL_6)
+ ${C_YEL}[7]${C_RST}  $(t CL_7)
+ ${C_YEL}[8]${C_RST}  $(t CL_8)
 
- ${C_RED}[0]${C_RST}  Back
+ ${C_RED}[0]${C_RST}  $(t BACK)
 EOF
         local opt=""
-        read -r -p " Select an option: " opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
+        read -r -p " $(t SELECT)" opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
         case "$opt" in
             1) clean_temp ;;
             2) header "Package Cache Cleanup"; pkg_clean_cache; pause ;;
@@ -1769,20 +2061,20 @@ power_shutdown() {
 power_menu() {
     local virt; virt=$(detect_virt)
     while true; do
-        header "Power & Boot"
-        [ "$virt" != "none" ] && printf '%s\n\n' "${C_DIM}Note: running inside $virt - firmware setup and rescue-mode reboots likely won't apply.${C_RST}"
+        header "$(t PW_TITLE)"
+        [ "$virt" != "none" ] && printf "${C_DIM}$(t PW_VIRT_NOTE)${C_RST}\\n\\n" "$virt"
         cat <<EOF
- ${C_YEL}[1]${C_RST}  Reboot into firmware (BIOS/UEFI) setup
- ${C_YEL}[2]${C_RST}  Boot into rescue / emergency mode
- ${C_YEL}[3]${C_RST}  Set default boot target             ${C_DIM}(GUI on/off)${C_RST}
- ${C_YEL}[4]${C_RST}  Suspend / hibernate
- ${C_YEL}[5]${C_RST}  Restart
- ${C_YEL}[6]${C_RST}  Shut down
+ ${C_YEL}[1]${C_RST}  $(t PW_1)
+ ${C_YEL}[2]${C_RST}  $(t PW_2)
+ ${C_YEL}[3]${C_RST}  $(t PW_3)
+ ${C_YEL}[4]${C_RST}  $(t PW_4)
+ ${C_YEL}[5]${C_RST}  $(t PW_5)
+ ${C_YEL}[6]${C_RST}  $(t PW_6)
 
- ${C_RED}[0]${C_RST}  Back
+ ${C_RED}[0]${C_RST}  $(t BACK)
 EOF
         local opt=""
-        read -r -p " Select an option: " opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
+        read -r -p " $(t SELECT)" opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
         case "$opt" in
             1) power_firmware ;;
             2) power_rescue ;;
@@ -1802,22 +2094,22 @@ EOF
 
 consoles_menu() {
     while true; do
-        header "Admin Consoles"
+        header "$(t AC_TITLE)"
         cat <<EOF
- ${C_YEL}[1]${C_RST}  Root shell                   ${C_DIM}(sudo -i)${C_RST}
- ${C_YEL}[2]${C_RST}  Service manager (systemctl status, interactive)
- ${C_YEL}[3]${C_RST}  Live log viewer              ${C_DIM}(journalctl -f)${C_RST}
- ${C_YEL}[4]${C_RST}  User management              ${C_DIM}(list / add / passwd)${C_RST}
- ${C_YEL}[5]${C_RST}  Process manager              ${C_DIM}(htop/top)${C_RST}
- ${C_YEL}[6]${C_RST}  Disk manager                 ${C_DIM}(lsblk / GNOME Disks if available)${C_RST}
- ${C_YEL}[7]${C_RST}  Cron / scheduled tasks       ${C_DIM}(crontab -l, systemd timers)${C_RST}
- ${C_YEL}[8]${C_RST}  Package manager GUI          ${C_DIM}(if installed)${C_RST}
- ${C_YEL}[9]${C_RST}  Network manager TUI/GUI      ${C_DIM}(nmtui / nm-connection-editor)${C_RST}
+ ${C_YEL}[1]${C_RST}  $(t AC_1)
+ ${C_YEL}[2]${C_RST}  $(t AC_2)
+ ${C_YEL}[3]${C_RST}  $(t AC_3)
+ ${C_YEL}[4]${C_RST}  $(t AC_4)
+ ${C_YEL}[5]${C_RST}  $(t AC_5)
+ ${C_YEL}[6]${C_RST}  $(t AC_6)
+ ${C_YEL}[7]${C_RST}  $(t AC_7)
+ ${C_YEL}[8]${C_RST}  $(t AC_8)
+ ${C_YEL}[9]${C_RST}  $(t AC_9)
 
- ${C_RED}[0]${C_RST}  Back
+ ${C_RED}[0]${C_RST}  $(t BACK)
 EOF
         local opt=""
-        read -r -p " Select an option: " opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
+        read -r -p " $(t SELECT)" opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
         case "$opt" in
             1) header "Root Shell"; printf '%s\n' "${C_DIM}Type 'exit' to return to the toolkit.${C_RST}"; sudo -i ;;
             2)
@@ -1934,24 +2226,24 @@ check_self_update() {
 
 main_menu() {
     while true; do
-        header "Main Menu"
+        header "$(t MAIN_TITLE)"
         cat <<EOF
- ${C_YEL}[1]${C_RST}  Admin Consoles
- ${C_YEL}[2]${C_RST}  System Info & Reports
- ${C_YEL}[3]${C_RST}  Repair & Maintenance
- ${C_YEL}[4]${C_RST}  Network Tools
- ${C_YEL}[5]${C_RST}  Package Management        ${C_DIM}($PKG_MANAGER)${C_RST}
- ${C_YEL}[6]${C_RST}  Security Tools
- ${C_YEL}[7]${C_RST}  Cleanup
- ${C_YEL}[8]${C_RST}  Power & Boot
- ${C_YEL}[9]${C_RST}  Live System Monitor
- ${C_YEL}[10]${C_RST} Open Reports Folder
- ${C_YEL}[11]${C_RST} Check for Toolkit Updates    ${C_DIM}(v$TOOLKIT_VERSION)${C_RST}
+ ${C_YEL}[1]${C_RST}  $(t MAIN_1)
+ ${C_YEL}[2]${C_RST}  $(t MAIN_2)
+ ${C_YEL}[3]${C_RST}  $(t MAIN_3)
+ ${C_YEL}[4]${C_RST}  $(t MAIN_4)
+ ${C_YEL}[5]${C_RST}  $(t MAIN_5)        ${C_DIM}($PKG_MANAGER)${C_RST}
+ ${C_YEL}[6]${C_RST}  $(t MAIN_6)
+ ${C_YEL}[7]${C_RST}  $(t MAIN_7)
+ ${C_YEL}[8]${C_RST}  $(t MAIN_8)
+ ${C_YEL}[9]${C_RST}  $(t MAIN_9)
+ ${C_YEL}[10]${C_RST} $(t MAIN_10)
+ ${C_YEL}[11]${C_RST} $(t MAIN_11)    ${C_DIM}(v$TOOLKIT_VERSION)${C_RST}
 
- ${C_RED}[0]${C_RST}  Exit
+ ${C_RED}[0]${C_RST}  $(t EXIT)
 EOF
         local opt=""
-        read -r -p " Select an option: " opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
+        read -r -p " $(t SELECT)" opt || { clear_screen; log_action "Input closed - exiting"; exit 0; }
         case "$opt" in
             1) consoles_menu ;;
             2) sysinfo_menu ;;
@@ -2021,5 +2313,6 @@ esac
 
 detect_distro
 mkdir -p "$REPORT_DIR" 2>/dev/null
-log_action "Toolkit started (v$TOOLKIT_VERSION, distro=$DISTRO_ID, pkgmgr=$PKG_MANAGER, root=$IS_ROOT)"
+select_language
+log_action "Toolkit started (v$TOOLKIT_VERSION, distro=$DISTRO_ID, pkgmgr=$PKG_MANAGER, root=$IS_ROOT, lang=$LANG_CHOICE)"
 main_menu
