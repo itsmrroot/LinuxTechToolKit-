@@ -36,7 +36,7 @@ fi
 # ============================================================
 #  GLOBALS
 # ============================================================
-TOOLKIT_VERSION="1.3.1"
+TOOLKIT_VERSION="1.3.2"
 GITHUB_REPO="itsmrroot/LinuxTechToolKit-"
 REPORT_DIR="${HOME}/TechToolkit_Reports"
 LOG_FILE="${REPORT_DIR}/toolkit_log.txt"
@@ -1443,25 +1443,45 @@ _speedtest_run_animated() {
         return
     fi
 
-    local ping_ms="" dl_mbps="" ul_mbps=""
+    local ping_ms="" dl_mbps="" ul_mbps="" isp="" srv_name="" srv_loc="" pub_ip=""
     case "$backend" in
         ookla)
             ping_ms=$(jq -r '.ping.latency // empty' "$tmp" 2>/dev/null)
             dl_mbps=$(jq -r 'if .download.bandwidth then (.download.bandwidth * 8 / 1000000) else empty end' "$tmp" 2>/dev/null)
             ul_mbps=$(jq -r 'if .upload.bandwidth then (.upload.bandwidth * 8 / 1000000) else empty end' "$tmp" 2>/dev/null)
+            isp=$(jq -r '.isp // empty' "$tmp" 2>/dev/null)
+            srv_name=$(jq -r '.server.name // empty' "$tmp" 2>/dev/null)
+            srv_loc=$(jq -r '.server.location // empty' "$tmp" 2>/dev/null)
+            pub_ip=$(jq -r '.interface.externalIp // empty' "$tmp" 2>/dev/null)
             ;;
         cli|cli_as_speedtest)
             ping_ms=$(jq -r '.ping // empty' "$tmp" 2>/dev/null)
             dl_mbps=$(jq -r 'if .download then (.download / 1000000) else empty end' "$tmp" 2>/dev/null)
             ul_mbps=$(jq -r 'if .upload then (.upload / 1000000) else empty end' "$tmp" 2>/dev/null)
+            isp=$(jq -r '.client.isp // empty' "$tmp" 2>/dev/null)
+            srv_name=$(jq -r '.server.sponsor // empty' "$tmp" 2>/dev/null)
+            srv_loc=$(jq -r '[.server.name, .server.country] | map(select(. != null and . != "")) | join(", ")' "$tmp" 2>/dev/null)
+            pub_ip=$(jq -r '.client.ip // empty' "$tmp" 2>/dev/null)
             ;;
         go)
             ping_ms=$(jq -r 'if .servers[0].latency then (.servers[0].latency / 1000000) else empty end' "$tmp" 2>/dev/null)
             dl_mbps=$(jq -r 'if .servers[0].dl_speed then (.servers[0].dl_speed * 8 / 1000000) else empty end' "$tmp" 2>/dev/null)
             ul_mbps=$(jq -r 'if .servers[0].ul_speed then (.servers[0].ul_speed * 8 / 1000000) else empty end' "$tmp" 2>/dev/null)
+            isp=$(jq -r '.user_info.Isp // empty' "$tmp" 2>/dev/null)
+            srv_name=$(jq -r '.servers[0].sponsor // empty' "$tmp" 2>/dev/null)
+            srv_loc=$(jq -r '[.servers[0].name, .servers[0].country] | map(select(. != null and . != "")) | join(", ")' "$tmp" 2>/dev/null)
+            pub_ip=$(jq -r '.user_info.IP // empty' "$tmp" 2>/dev/null)
             ;;
     esac
     rm -f "$tmp"
+
+    # speedtest-cli's JSON "ping" field has been observed to occasionally
+    # report an absurd value (minutes, not milliseconds) even when the tool's
+    # own plain-text mode shows a sane number for the same run - clearly a
+    # measurement glitch on the tool's side. Don't show obvious garbage.
+    if [ -n "$ping_ms" ] && awk -v v="$ping_ms" 'BEGIN{exit !(v>5000)}'; then
+        ping_ms=""
+    fi
 
     if [ -z "$dl_mbps" ] && [ -z "$ping_ms" ]; then
         printf '%s\n' "${C_YEL}Couldn't parse the result - re-running with plain output instead.${C_RST}"
@@ -1469,6 +1489,9 @@ _speedtest_run_animated() {
         return
     fi
 
+    echo
+    [ -n "$isp" ] && printf ' %-10s %s%s%s\n' "ISP" "$C_DIM" "${isp}$([ -n "$pub_ip" ] && printf ' (%s)' "$pub_ip")" "$C_RST"
+    [ -n "$srv_name" ] && printf ' %-10s %s%s%s%s\n' "Server" "$C_DIM" "$srv_name" "$([ -n "$srv_loc" ] && printf ' - %s' "$srv_loc")" "$C_RST"
     echo
     [ -n "$ping_ms" ] && printf ' %-10s %s %5.0f ms\n' "Ping" "$(_speed_bar "$ping_ms" 200 30 50 150 lower_better)" "$ping_ms"
     [ -n "$dl_mbps" ] && printf ' %-10s %s %6.1f Mbps\n' "Download" "$(_speed_bar "$dl_mbps" 500 30 50 10 higher_better)" "$dl_mbps"
