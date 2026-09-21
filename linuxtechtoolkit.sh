@@ -1342,14 +1342,21 @@ net_reset() {
 
 net_speedtest() {
     header "Internet Speed Test"
-    if ! need_cmd speedtest && ! need_cmd speedtest-cli; then
-        printf '%s\n' "${C_DIM}Needs Ookla's speedtest CLI or 'speedtest-cli'.${C_RST}"
-        offer_install speedtest-cli speedtest-cli || { pause; return; }
+    if ! need_cmd speedtest && ! need_cmd speedtest-cli && ! need_cmd speedtest-go; then
+        printf '%s\n' "${C_DIM}Needs a speedtest tool: Ookla's speedtest CLI, 'speedtest-cli', or (on Kali, which doesn't package speedtest-cli) 'speedtest-go'.${C_RST}"
+        if ! offer_install speedtest-cli speedtest-cli; then
+            # speedtest-cli isn't in every distro's repos (e.g. Kali dropped it in
+            # favor of speedtest-go) - fall back to the alternative before giving up.
+            printf '%s\n' "${C_DIM}'speedtest-cli' isn't available from your package manager - trying 'speedtest-go' instead.${C_RST}"
+            offer_install speedtest-go speedtest-go || { pause; return; }
+        fi
     fi
     if need_cmd speedtest; then
         speedtest --accept-license --accept-gdpr 2>/dev/null || speedtest
-    else
+    elif need_cmd speedtest-cli; then
         speedtest-cli
+    else
+        speedtest-go
     fi
     pause
 }
