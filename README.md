@@ -57,7 +57,7 @@ One-click diagnosis (router/internet/DNS), IP configuration, public IP, flush DN
 Check for updates, update & upgrade everything, clean cache/autoremove, install, search, remove, and list explicitly-installed (top-level) packages — all through whichever package manager your distro actually uses.
 
 ### 6. Security Tools *(no Windows equivalent — added because it matters more on Linux, especially for anything internet-facing)*
-Firewall enable/disable, listening ports with owning processes, pending security updates, an SSH `sshd_config` audit (flags `PermitRootLogin yes` and password-only auth), failed login attempts, users holding UID 0 or sudo/wheel membership, a rootkit scan (`rkhunter`/`chkrootkit`), a world-writable-files scan, **Fail2ban status with ban/unban an IP**, a **Lynis security audit** (0–100 hardening index, offered install if missing), **kernel (sysctl) hardening** — view current vs. recommended values for ASLR, ICMP redirects, SYN cookies, etc., apply a baseline with one confirm, and revert from an automatic backup — and **SELinux/AppArmor status**.
+Firewall enable/disable, listening ports with owning processes, pending security updates, an SSH `sshd_config` audit (flags `PermitRootLogin yes` and password-only auth), failed login attempts, users holding UID 0 or sudo/wheel membership, a rootkit scan (`rkhunter`/`chkrootkit`), a world-writable-files scan, **Fail2ban status with ban/unban an IP**, a **Lynis security audit** (0–100 hardening index, offered install if missing), **kernel (sysctl) hardening** — view current vs. recommended values for ASLR, ICMP redirects, SYN cookies, etc., apply a baseline with one confirm, and revert from an automatic backup — **SELinux/AppArmor status**, and **disk/USB encryption** — LUKS-encrypt a disk or USB drive (with a typed device-path confirmation and a guard against touching whatever holds your root filesystem), unlock/decrypt an encrypted disk, and lock it again.
 
 ### 7. Cleanup
 Temp files (`/tmp` + `~/.cache`), package cache/autoremove, systemd journal vacuum, empty trash, remove old kernels, Docker/Podman prune, thumbnail cache, and an interactive disk-usage browser (`ncdu` if installed, else a built-in top-20-biggest-folders fallback) for "what's eating my disk?".
@@ -125,6 +125,8 @@ The **Show saved Wi-Fi passwords** tool prints stored network passwords in plain
 The **kernel (sysctl) hardening** baseline deliberately excludes `net.ipv4.ip_forward` and other context-dependent settings that routers, Docker hosts, and VPN boxes legitimately need enabled — it only touches settings that are safe defaults on virtually any machine, and it backs up whatever was there before so you can revert with one confirm.
 
 The **backup key config files** tool excludes `/etc/shadow`, `/etc/gshadow`, SSH host private keys, and any `*.key`/`*.pem` files by design — it's a config snapshot for disaster recovery, not a credentials backup.
+
+The **Encrypt a disk / USB drive** tool runs `cryptsetup luksFormat`, which destroys all existing data on the target device. It refuses to touch whatever device holds your root filesystem and requires you to type the exact device path back before proceeding, but there's no undo once you confirm — double-check you've picked the right device.
 
 ## 🤝 Contributing
 

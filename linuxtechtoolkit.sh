@@ -36,7 +36,7 @@ fi
 # ============================================================
 #  GLOBALS
 # ============================================================
-TOOLKIT_VERSION="1.2.0"
+TOOLKIT_VERSION="1.3.0"
 GITHUB_REPO="itsmrroot/LinuxTechToolKit-"
 REPORT_DIR="${HOME}/TechToolkit_Reports"
 LOG_FILE="${REPORT_DIR}/toolkit_log.txt"
@@ -143,6 +143,9 @@ declare -A T_EN=(
     [ST_10]="Lynis security audit       (hardening index 0-100)"
     [ST_11]="Kernel (sysctl) hardening  (view / apply baseline)"
     [ST_12]="SELinux / AppArmor status"
+    [ST_13]="Encrypt a disk / USB drive     (LUKS - destroys existing data)"
+    [ST_14]="Unlock / decrypt an encrypted disk"
+    [ST_15]="Lock an unlocked encrypted disk"
 
     [PM_TITLE]="Package Management"
     [PM_ON]="on"
@@ -267,6 +270,9 @@ declare -A T_DE=(
     [ST_10]="Lynis-Sicherheitsaudit      (Härtungsindex 0-100)"
     [ST_11]="Kernel-Härtung (sysctl)     (anzeigen / Basis anwenden)"
     [ST_12]="SELinux-/AppArmor-Status"
+    [ST_13]="Festplatte / USB-Laufwerk verschlüsseln (LUKS - löscht vorhandene Daten)"
+    [ST_14]="Verschlüsselte Festplatte entsperren / entschlüsseln"
+    [ST_15]="Entsperrte verschlüsselte Festplatte sperren"
 
     [PM_TITLE]="Paketverwaltung"
     [PM_ON]="auf"
@@ -1740,6 +1746,163 @@ sec_lsm_status() {
     pause
 }
 
+# _root_device_guard <devpath> -- returns 0 (safe to refuse) if devpath looks
+# like it holds the running root filesystem, based on `findmnt`'s source for /.
+_root_device_guard() {
+    local devpath="$1" root_src
+    root_src=$(findmnt -no SOURCE / 2>/dev/null)
+    [ -z "$root_src" ] && return 1
+    [[ "$root_src" == "$devpath"* ]] || [[ "$devpath" == "$root_src"* ]]
+}
+
+sec_luks_encrypt() {
+    header "Encrypt a Disk / USB Drive (LUKS)"
+    if ! need_cmd cryptsetup; then
+        offer_install cryptsetup cryptsetup || { pause; return; }
+    fi
+    printf '%s\n' "${C_RED}This PERMANENTLY DESTROYS all data currently on the target device.${C_RST}"
+    printf '%s\n\n' "${C_DIM}Only whole unmounted disks/partitions - never the device your root filesystem lives on.${C_RST}"
+    lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL 2>/dev/null
+    echo
+    local dev=""
+    read -r -p "Device to encrypt (e.g. sdb1 or sdb, without /dev/ - blank to cancel): " dev
+    [ -z "$dev" ] && return
+    local devpath="/dev/$dev"
+    if [ ! -b "$devpath" ]; then
+        printf '%s\n' "${C_RED}$devpath is not a block device.${C_RST}"
+        pause; return
+    fi
+    if _root_device_guard "$devpath"; then
+        printf '%s\n' "${C_RED}Refusing: $devpath looks like it holds your root filesystem.${C_RST}"
+        pause; return
+    fi
+    if findmnt -no TARGET "$devpath" >/dev/null 2>&1; then
+        printf '%s\n' "${C_RED}$devpath is currently mounted. Unmount it first.${C_RST}"
+        pause; return
+    fi
+    echo
+    printf '%s\n' "${C_YEL}About to LUKS-format $devpath. Every file on it will be unrecoverable.${C_RST}"
+    local typed=""
+    read -r -p "Type the device path exactly ($devpath) to confirm: " typed
+    if [ "$typed" != "$devpath" ]; then
+        printf '%s\n' "${C_DIM}Device path didn't match - cancelled.${C_RST}"
+        pause; return
+    fi
+    printf '%s\n' "${C_DIM}cryptsetup will ask you to type YES (uppercase) once more, then set a passphrase.${C_RST}"
+    if [ "$IS_ROOT" -eq 1 ]; then
+        cryptsetup luksFormat "$devpath"
+    else
+        sudo cryptsetup luksFormat "$devpath"
+    fi
+    if [ $? -ne 0 ]; then
+        printf '%s\n' "${C_RED}luksFormat failed or was cancelled - nothing changed beyond that point.${C_RST}"
+        pause; return
+    fi
+    log_action "LUKS-formatted $devpath"
+    local mapname=""
+    read -r -p "Name for the unlocked mapping [default: techtoolkit_$(basename "$dev")]: " mapname
+    mapname="${mapname:-techtoolkit_$(basename "$dev")}"
+    if [ "$IS_ROOT" -eq 1 ]; then
+        cryptsetup luksOpen "$devpath" "$mapname"
+    else
+        sudo cryptsetup luksOpen "$devpath" "$mapname"
+    fi
+    if [ $? -ne 0 ]; then
+        printf '%s\n' "${C_YEL}Encrypted, but opening it just now failed - unlock it later from this menu.${C_RST}"
+        pause; return
+    fi
+    echo
+    printf '%s\n' " [1] Create an ext4 filesystem on it now   [2] Leave it unformatted"
+    local fso=""
+    read -r -p "Select: " fso
+    if [ "$fso" = "1" ]; then
+        run_priv "mkfs.ext4 mapper" mkfs.ext4 "/dev/mapper/$mapname"
+        printf '%s\n' "${C_GRN}Encrypted and formatted. Available at /dev/mapper/$mapname.${C_RST}"
+    else
+        printf '%s\n' "${C_GRN}Encrypted and unlocked at /dev/mapper/$mapname - format or use it now.${C_RST}"
+    fi
+    log_action "LUKS-encrypted $devpath as $mapname"
+    pause
+}
+
+sec_luks_unlock() {
+    header "Unlock / Decrypt an Encrypted Disk (LUKS)"
+    if ! need_cmd cryptsetup; then
+        offer_install cryptsetup cryptsetup || { pause; return; }
+    fi
+    printf '%s\n' "${C_CYAN}Block devices with a LUKS signature:${C_RST}"
+    lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT 2>/dev/null | grep -i 'crypto_luks\|NAME'
+    echo
+    local dev=""
+    read -r -p "Encrypted device to unlock (e.g. sdb1, without /dev/ - blank to cancel): " dev
+    [ -z "$dev" ] && return
+    local devpath="/dev/$dev"
+    if [ ! -b "$devpath" ]; then
+        printf '%s\n' "${C_RED}$devpath is not a block device.${C_RST}"
+        pause; return
+    fi
+    local mapname=""
+    read -r -p "Name for the unlocked mapping [default: $(basename "$dev")_unlocked]: " mapname
+    mapname="${mapname:-$(basename "$dev")_unlocked}"
+    if [ "$IS_ROOT" -eq 1 ]; then
+        cryptsetup luksOpen "$devpath" "$mapname"
+    else
+        sudo cryptsetup luksOpen "$devpath" "$mapname"
+    fi
+    if [ $? -ne 0 ]; then
+        printf '%s\n' "${C_RED}Unlock failed - wrong passphrase, or $devpath isn't a LUKS device.${C_RST}"
+        pause; return
+    fi
+    printf '%s\n' "${C_GRN}Unlocked at /dev/mapper/$mapname${C_RST}"
+    log_action "LUKS-unlocked $devpath as $mapname"
+    local mnt=""
+    read -r -p "Mount point to mount it at now (blank to skip mounting): " mnt
+    if [ -n "$mnt" ]; then
+        run_priv "mkdir mountpoint" mkdir -p "$mnt"
+        if run_priv "mount mapper" mount "/dev/mapper/$mapname" "$mnt"; then
+            printf '%s\n' "${C_GRN}Mounted at $mnt${C_RST}"
+        else
+            printf '%s\n' "${C_YEL}Unlocked but mounting failed (no filesystem on it yet?).${C_RST}"
+        fi
+    fi
+    pause
+}
+
+sec_luks_lock() {
+    header "Lock an Encrypted Disk (LUKS)"
+    if ! need_cmd cryptsetup; then
+        printf '%s\n' "${C_YEL}cryptsetup isn't installed.${C_RST}"
+        pause; return
+    fi
+    printf '%s\n' "${C_CYAN}Currently open LUKS mappings:${C_RST}"
+    local m found=0 status_line
+    for m in /dev/mapper/*; do
+        [ -e "$m" ] || continue
+        [ "$(basename "$m")" = "control" ] && continue
+        status_line=$(run_priv "cryptsetup status" cryptsetup status "$(basename "$m")" 2>/dev/null | head -1)
+        if [ -n "$status_line" ]; then
+            printf '%s\n' "$status_line"
+            found=1
+        fi
+    done
+    [ "$found" -eq 0 ] && printf '%s\n' "${C_DIM}(none found)${C_RST}"
+    echo
+    local mapname=""
+    read -r -p "Mapping name to lock (e.g. usbcrypt, blank to cancel): " mapname
+    [ -z "$mapname" ] && return
+    local mnt; mnt=$(findmnt -n -o TARGET "/dev/mapper/$mapname" 2>/dev/null)
+    if [ -n "$mnt" ]; then
+        run_priv "umount mapper" umount "$mnt" && printf '%s\n' "${C_DIM}Unmounted $mnt${C_RST}"
+    fi
+    if run_priv "luksClose $mapname" cryptsetup luksClose "$mapname"; then
+        printf '%s\n' "${C_GRN}Locked.${C_RST}"
+        log_action "LUKS-locked $mapname"
+    else
+        printf '%s\n' "${C_RED}Failed to lock - still busy/mounted elsewhere?${C_RST}"
+    fi
+    pause
+}
+
 security_menu() {
     while true; do
         header "$(t ST_TITLE)"
@@ -1756,6 +1919,9 @@ security_menu() {
  ${C_YEL}[10]${C_RST} $(t ST_10)
  ${C_YEL}[11]${C_RST} $(t ST_11)
  ${C_YEL}[12]${C_RST} $(t ST_12)
+ ${C_YEL}[13]${C_RST} $(t ST_13)
+ ${C_YEL}[14]${C_RST} $(t ST_14)
+ ${C_YEL}[15]${C_RST} $(t ST_15)
 
  ${C_RED}[0]${C_RST}  $(t BACK)
 EOF
@@ -1774,6 +1940,9 @@ EOF
             10) sec_lynis_audit ;;
             11) sec_sysctl_hardening ;;
             12) sec_lsm_status ;;
+            13) sec_luks_encrypt ;;
+            14) sec_luks_unlock ;;
+            15) sec_luks_lock ;;
             0) return ;;
             *) invalid_choice ;;
         esac
@@ -2177,53 +2346,52 @@ check_self_update() {
         printf '%s\n' "${C_YEL}'curl' is required to check for updates.${C_RST}"
         pause; return
     fi
-    printf '%s\n' "${C_DIM}Checking github.com/$GITHUB_REPO for a newer release...${C_RST}"
-    local response
-    response=$(curl -fsSL --max-time 10 "https://api.github.com/repos/$GITHUB_REPO/releases/latest" 2>/dev/null)
-    if [ -z "$response" ]; then
-        printf '%s\n' "${C_YEL}Couldn't reach GitHub (no internet, or no release has been published yet).${C_RST}"
+    # Compares against the raw script on the main branch rather than GitHub's
+    # Releases API: this project ships by pushing straight to main (bump
+    # TOOLKIT_VERSION, commit, push), not by cutting tagged Releases, so a
+    # Releases-API check would 404 forever even when main is genuinely ahead.
+    printf '%s\n' "${C_DIM}Checking github.com/$GITHUB_REPO (main branch) for a newer version...${C_RST}"
+    local url="https://raw.githubusercontent.com/$GITHUB_REPO/main/linuxtechtoolkit.sh"
+    local remote_script; remote_script=$(mktemp)
+    if ! curl -fsSL --max-time 15 "$url" -o "$remote_script" || [ ! -s "$remote_script" ]; then
+        printf '%s\n' "${C_YEL}Couldn't reach GitHub (no internet, or the repo/branch is unreachable).${C_RST}"
+        rm -f "$remote_script"
         pause; return
     fi
-    local latest_tag
-    if need_cmd jq; then
-        latest_tag=$(printf '%s' "$response" | jq -r '.tag_name // empty')
-    else
-        latest_tag=$(printf '%s' "$response" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
-    fi
-    if [ -z "$latest_tag" ]; then
-        printf '%s\n' "${C_YEL}No published releases found yet for $GITHUB_REPO.${C_RST}"
+    local remote_ver
+    remote_ver=$(grep -m1 '^TOOLKIT_VERSION=' "$remote_script" | sed -E 's/TOOLKIT_VERSION="([^"]+)"/\1/')
+    if [ -z "$remote_ver" ]; then
+        printf '%s\n' "${C_YEL}Couldn't read a version string from the remote file.${C_RST}"
+        rm -f "$remote_script"
         pause; return
     fi
-    local latest_ver="${latest_tag#v}"
     printf ' %-20s: %s\n' "Installed" "$TOOLKIT_VERSION"
-    printf ' %-20s: %s\n' "Latest" "$latest_ver"
-    if ! _ver_gt "$latest_ver" "$TOOLKIT_VERSION"; then
+    printf ' %-20s: %s\n' "Latest (main)" "$remote_ver"
+    if ! _ver_gt "$remote_ver" "$TOOLKIT_VERSION"; then
         printf '\n%s\n' "${C_GRN}You're already on the latest version.${C_RST}"
+        rm -f "$remote_script"
         pause; return
     fi
     echo
     printf '%s\n' "${C_GRN}A newer version is available.${C_RST}"
     local ans=""
-    read -r -p "Download and install it now? [y/N] " ans
-    [[ "$ans" =~ ^[Yy]$ ]] || { pause; return; }
-    local dest="${BASH_SOURCE[0]}"
-    local url="https://raw.githubusercontent.com/$GITHUB_REPO/$latest_tag/linuxtechtoolkit.sh"
-    local tmp; tmp=$(mktemp)
-    if ! curl -fsSL --max-time 20 "$url" -o "$tmp"; then
-        printf '%s\n' "${C_RED}Download failed.${C_RST}"
-        rm -f "$tmp"; pause; return
+    read -r -p "Install it now? [y/N] " ans
+    if ! [[ "$ans" =~ ^[Yy]$ ]]; then
+        rm -f "$remote_script"
+        pause; return
     fi
-    if ! bash -n "$tmp"; then
+    if ! bash -n "$remote_script"; then
         printf '%s\n' "${C_RED}Downloaded file failed a syntax check - not installed. Nothing was changed.${C_RST}"
-        rm -f "$tmp"; pause; return
+        rm -f "$remote_script"; pause; return
     fi
-    if run_priv "self-update install" cp "$tmp" "$dest" && run_priv "self-update chmod" chmod +x "$dest"; then
-        printf '%s\n' "${C_GRN}Updated to $latest_ver. Restart the toolkit to use the new version.${C_RST}"
-        log_action "Self-updated to $latest_ver"
+    local dest="${BASH_SOURCE[0]}"
+    if run_priv "self-update install" cp "$remote_script" "$dest" && run_priv "self-update chmod" chmod +x "$dest"; then
+        printf '%s\n' "${C_GRN}Updated to $remote_ver. Restart the toolkit to use the new version.${C_RST}"
+        log_action "Self-updated to $remote_ver"
     else
         printf '%s\n' "${C_RED}Couldn't write to $dest - check permissions.${C_RST}"
     fi
-    rm -f "$tmp"
+    rm -f "$remote_script"
     pause
 }
 
