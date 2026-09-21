@@ -51,7 +51,7 @@ Quick summary (OS, kernel, CPU, RAM, disks, uptime, GPU, virtualization type, SE
 Fix broken packages, full system update, rebuild initramfs, update GRUB config, schedule an fsck on next boot, disk SMART self-test, reset failed systemd units, restart a specific service, rebuild DKMS kernel modules (NVIDIA/VirtualBox-style out-of-tree drivers), create a system snapshot (`timeshift`/`snapper` if available), and back up/extract key config files (`/etc`, crontabs, package list — secrets like `/etc/shadow` and private keys are deliberately excluded).
 
 ### 4. Network Tools
-One-click diagnosis (router/internet/DNS), IP configuration, public IP, flush DNS cache, release & renew DHCP lease, ping, traceroute (`mtr` if available), saved Wi-Fi networks, active connections (saved to a file), full network reset, **show saved Wi-Fi passwords**, internet speed test (Ookla CLI or `speedtest-cli`, auto-installed on first use), configure a static or DHCP IP via `nmcli`, and firewall status.
+One-click diagnosis (router/internet/DNS), IP configuration, public IP, flush DNS cache, release & renew DHCP lease, ping, traceroute (`mtr` if available), saved Wi-Fi networks, active connections (saved to a file), full network reset, **show saved Wi-Fi passwords**, an **animated internet speed test** — a live spinner while it runs, then colored gauge bars for ping/download/upload (Ookla's CLI, `speedtest-cli`, or on Kali `speedtest-go`, auto-installed on first use; falls back to the tool's own plain output if `jq` isn't available), configure a static or DHCP IP via `nmcli`, and firewall status.
 
 ### 5. Package Management
 Check for updates, update & upgrade everything, clean cache/autoremove, install, search, remove, and list explicitly-installed (top-level) packages — all through whichever package manager your distro actually uses.
@@ -112,7 +112,7 @@ The interactive menu is the default, but a few flags work outside it:
 
 - Bash 4 or newer (ships by default on every current Linux distribution)
 - Standard coreutils, `iproute2`, and `procps` (present on virtually every install)
-- Optional, and only needed by specific tools: `sudo`, `curl`, `smartmontools` (SMART health), `speedtest-cli` or Ookla's `speedtest` CLI, `NetworkManager`/`nmcli`, `rkhunter`/`chkrootkit`, `fail2ban`, `lynis`, `ncdu`, `cryptsetup`, `htop`/`btop`, `timeshift`/`snapper`. The toolkit detects each one at the point of use and offers to install it through your package manager if it's missing.
+- Optional, and only needed by specific tools: `sudo`, `curl`, `jq` (graphical speed test view), `smartmontools` (SMART health), `speedtest-cli`/`speedtest-go` or Ookla's `speedtest` CLI, `NetworkManager`/`nmcli`, `rkhunter`/`chkrootkit`, `fail2ban`, `lynis`, `ncdu`, `cryptsetup`, `htop`/`btop`, `timeshift`/`snapper`. The toolkit detects each one at the point of use and offers to install it through your package manager if it's missing.
 
 Tested against Debian/Ubuntu (`apt`), Fedora (`dnf`), and Arch (`pacman`) containers; `zypper` and `apk` code paths are implemented against their documented CLIs but weren't tested against a live openSUSE/Alpine system.
 

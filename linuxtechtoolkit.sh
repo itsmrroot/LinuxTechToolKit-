@@ -36,7 +36,7 @@ fi
 # ============================================================
 #  GLOBALS
 # ============================================================
-TOOLKIT_VERSION="1.3.0"
+TOOLKIT_VERSION="1.3.1"
 GITHUB_REPO="itsmrroot/LinuxTechToolKit-"
 REPORT_DIR="${HOME}/TechToolkit_Reports"
 LOG_FILE="${REPORT_DIR}/toolkit_log.txt"
@@ -371,7 +371,7 @@ confirm() {
     local prompt; prompt=$(printf "$(t CONFIRM_PROMPT)" "$word")
     local ans=""
     read -r -p "$prompt " ans
-    if [ "$ans" = "$word" ]; then
+    if [ "${ans^^}" = "$word" ]; then
         return 0
     fi
     printf '%s\n' "${C_DIM}$(t CANCELLED)${C_RST}"
@@ -593,6 +593,50 @@ _mon_bar() {
     for ((i=0; i<filled; i++)); do bar+="#"; done
     for ((i=0; i<empty; i++)); do bar+="-"; done
     printf '%s[%s]%s %3d%%' "$color" "$bar" "$C_RST" "$pct"
+}
+
+# _speed_bar <value> <max> <width> <good_threshold> <ok_threshold> <higher_better|lower_better>
+# -> colored gauge bar for a floating-point metric (Mbps, ms, ...)
+_speed_bar() {
+    awk -v val="$1" -v max="$2" -v width="${3:-30}" -v good="$4" -v ok="$5" -v dir="${6:-higher_better}" \
+        -v grn="$C_GRN" -v yel="$C_YEL" -v red="$C_RED" -v rst="$C_RST" 'BEGIN{
+        pct = (max > 0) ? (val / max * 100) : 0
+        if (pct > 100) pct = 100
+        if (pct < 0) pct = 0
+        filled = int(width * pct / 100)
+        bar = ""
+        for (i = 0; i < filled; i++) bar = bar "#"
+        for (i = filled; i < width; i++) bar = bar "-"
+        if (dir == "lower_better") {
+            color = (val <= good) ? grn : (val <= ok) ? yel : red
+        } else {
+            color = (val >= good) ? grn : (val >= ok) ? yel : red
+        }
+        printf "%s[%s]%s", color, bar, rst
+    }'
+}
+
+# _speedtest_spinner <pid> -- animated spinner with a cycling status line and
+# elapsed timer while a backgrounded speed test runs; the phases are cosmetic
+# (we have no true progress feed from a batch/JSON-mode run) but track roughly
+# where a real test is at time-wise.
+_speedtest_spinner() {
+    local pid="$1"
+    local frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    local phases=("Finding the fastest server..." "Measuring latency..." "Testing download speed..." "Testing upload speed..." "Finishing up...")
+    local tick=0 elapsed=0 phase_idx=0
+    tput civis 2>/dev/null
+    while kill -0 "$pid" 2>/dev/null; do
+        local frame="${frames:tick % ${#frames}:1}"
+        phase_idx=$(( elapsed / 4 ))
+        [ "$phase_idx" -ge "${#phases[@]}" ] && phase_idx=$(( ${#phases[@]} - 1 ))
+        printf '\r %s%s%s  %-32s %ds ' "$C_CYAN" "$frame" "$C_RST" "${phases[$phase_idx]}" "$elapsed"
+        sleep 0.2
+        tick=$((tick + 1))
+        elapsed=$(( tick / 5 ))
+    done
+    printf '\r%*s\r' 70 ""
+    tput cnorm 2>/dev/null
 }
 
 _mon_cpu_snapshot() {
@@ -1346,6 +1390,92 @@ net_reset() {
     pause
 }
 
+# _speedtest_backend -> prints one of: ookla, cli, cli_as_speedtest, go, "" (none)
+# Debian/Ubuntu's speedtest-cli package installs the SAME python script under
+# two names, /usr/bin/speedtest-cli AND /usr/bin/speedtest - the latter looks
+# exactly like Ookla's official CLI at a glance (need_cmd speedtest succeeds)
+# but doesn't understand --accept-license/--accept-gdpr, and critically exits
+# 0 even on an argument error, so a naive `speedtest ... || speedtest` never
+# falls back and silently does nothing. `speedtest --version` reliably tells
+# them apart: Ookla's prints "Speedtest by Ookla"; the Python one prints
+# "speedtest-cli X.Y.Z".
+_speedtest_backend() {
+    if need_cmd speedtest && speedtest --version 2>&1 | grep -qi 'ookla'; then
+        printf 'ookla'
+    elif need_cmd speedtest-cli; then
+        printf 'cli'
+    elif need_cmd speedtest; then
+        printf 'cli_as_speedtest'
+    elif need_cmd speedtest-go; then
+        printf 'go'
+    fi
+}
+
+_speedtest_run_plain() {
+    case "$1" in
+        ookla) speedtest --accept-license --accept-gdpr ;;
+        cli) speedtest-cli ;;
+        cli_as_speedtest) speedtest ;;
+        go) speedtest-go ;;
+        *) printf '%s\n' "${C_RED}No speed test tool available.${C_RST}" ;;
+    esac
+}
+
+_speedtest_run_animated() {
+    local backend="$1"
+    local tmp; tmp=$(mktemp)
+    (
+        case "$backend" in
+            ookla) speedtest --accept-license --accept-gdpr -f json > "$tmp" 2>/dev/null ;;
+            cli) speedtest-cli --json > "$tmp" 2>/dev/null ;;
+            cli_as_speedtest) speedtest --json > "$tmp" 2>/dev/null ;;
+            go) speedtest-go --json > "$tmp" 2>/dev/null ;;
+        esac
+    ) &
+    local pid=$!
+    _speedtest_spinner "$pid"
+    wait "$pid"
+
+    if [ ! -s "$tmp" ]; then
+        printf '%s\n' "${C_YEL}Structured output failed - re-running with plain output instead.${C_RST}"
+        rm -f "$tmp"
+        _speedtest_run_plain "$backend"
+        return
+    fi
+
+    local ping_ms="" dl_mbps="" ul_mbps=""
+    case "$backend" in
+        ookla)
+            ping_ms=$(jq -r '.ping.latency // empty' "$tmp" 2>/dev/null)
+            dl_mbps=$(jq -r 'if .download.bandwidth then (.download.bandwidth * 8 / 1000000) else empty end' "$tmp" 2>/dev/null)
+            ul_mbps=$(jq -r 'if .upload.bandwidth then (.upload.bandwidth * 8 / 1000000) else empty end' "$tmp" 2>/dev/null)
+            ;;
+        cli|cli_as_speedtest)
+            ping_ms=$(jq -r '.ping // empty' "$tmp" 2>/dev/null)
+            dl_mbps=$(jq -r 'if .download then (.download / 1000000) else empty end' "$tmp" 2>/dev/null)
+            ul_mbps=$(jq -r 'if .upload then (.upload / 1000000) else empty end' "$tmp" 2>/dev/null)
+            ;;
+        go)
+            ping_ms=$(jq -r 'if .servers[0].latency then (.servers[0].latency / 1000000) else empty end' "$tmp" 2>/dev/null)
+            dl_mbps=$(jq -r 'if .servers[0].dl_speed then (.servers[0].dl_speed * 8 / 1000000) else empty end' "$tmp" 2>/dev/null)
+            ul_mbps=$(jq -r 'if .servers[0].ul_speed then (.servers[0].ul_speed * 8 / 1000000) else empty end' "$tmp" 2>/dev/null)
+            ;;
+    esac
+    rm -f "$tmp"
+
+    if [ -z "$dl_mbps" ] && [ -z "$ping_ms" ]; then
+        printf '%s\n' "${C_YEL}Couldn't parse the result - re-running with plain output instead.${C_RST}"
+        _speedtest_run_plain "$backend"
+        return
+    fi
+
+    echo
+    [ -n "$ping_ms" ] && printf ' %-10s %s %5.0f ms\n' "Ping" "$(_speed_bar "$ping_ms" 200 30 50 150 lower_better)" "$ping_ms"
+    [ -n "$dl_mbps" ] && printf ' %-10s %s %6.1f Mbps\n' "Download" "$(_speed_bar "$dl_mbps" 500 30 50 10 higher_better)" "$dl_mbps"
+    [ -n "$ul_mbps" ] && printf ' %-10s %s %6.1f Mbps\n' "Upload" "$(_speed_bar "$ul_mbps" 500 30 20 5 higher_better)" "$ul_mbps"
+    echo
+}
+
 net_speedtest() {
     header "Internet Speed Test"
     if ! need_cmd speedtest && ! need_cmd speedtest-cli && ! need_cmd speedtest-go; then
@@ -1357,12 +1487,25 @@ net_speedtest() {
             offer_install speedtest-go speedtest-go || { pause; return; }
         fi
     fi
-    if need_cmd speedtest; then
-        speedtest --accept-license --accept-gdpr 2>/dev/null || speedtest
-    elif need_cmd speedtest-cli; then
-        speedtest-cli
+
+    local backend; backend=$(_speedtest_backend)
+    if [ -z "$backend" ]; then
+        printf '%s\n' "${C_RED}No speed test tool available.${C_RST}"
+        pause; return
+    fi
+
+    local use_json=0
+    if need_cmd jq; then
+        use_json=1
     else
-        speedtest-go
+        printf '%s\n' "${C_DIM}Install 'jq' for an animated, graphical result view (optional - falls back to plain output otherwise).${C_RST}"
+        offer_install jq jq && need_cmd jq && use_json=1
+    fi
+
+    if [ "$use_json" -eq 1 ]; then
+        _speedtest_run_animated "$backend"
+    else
+        _speedtest_run_plain "$backend"
     fi
     pause
 }
