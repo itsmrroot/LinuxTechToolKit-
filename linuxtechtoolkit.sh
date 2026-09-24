@@ -36,7 +36,7 @@ fi
 # ============================================================
 #  GLOBALS
 # ============================================================
-TOOLKIT_VERSION="1.3.2"
+TOOLKIT_VERSION="1.3.3"
 GITHUB_REPO="itsmrroot/LinuxTechToolKit-"
 REPORT_DIR="${HOME}/TechToolkit_Reports"
 LOG_FILE="${REPORT_DIR}/toolkit_log.txt"
@@ -1390,7 +1390,44 @@ net_reset() {
     pause
 }
 
-# _speedtest_backend -> prints one of: ookla, cli, cli_as_speedtest, go, "" (none)
+# Last-resort speedtest-cli: the upstream project is a single self-contained
+# python script, so when no package manager offers it (e.g. RHEL/Oracle/Rocky/
+# Alma, where it only lives in EPEL, which is off by default) it can simply be
+# downloaded into the user's home and run with python3 - no root, no repos.
+SPEEDTEST_PY="${HOME}/.local/share/linuxtechtoolkit/speedtest-cli.py"
+SPEEDTEST_PY_URL="https://raw.githubusercontent.com/sivel/speedtest-cli/v2.1.3/speedtest.py"
+
+# _speedtest_fetch_py -- offer to download the standalone speedtest-cli script
+_speedtest_fetch_py() {
+    if ! need_cmd python3; then
+        printf '%s\n' "${C_RED}python3 isn't installed, so the standalone speedtest-cli can't be used either.${C_RST}"
+        return 1
+    fi
+    local ans=""
+    read -r -p "Download the standalone speedtest-cli script (from github.com/sivel/speedtest-cli) to run it with python3? [y/N] " ans
+    [[ "$ans" =~ ^[Yy]$ ]] || return 1
+    mkdir -p "$(dirname "$SPEEDTEST_PY")" 2>/dev/null
+    local tmp="${SPEEDTEST_PY}.part"
+    if need_cmd curl; then
+        curl -fsSL --max-time 30 "$SPEEDTEST_PY_URL" -o "$tmp"
+    elif need_cmd wget; then
+        wget -q -T 30 -O "$tmp" "$SPEEDTEST_PY_URL"
+    else
+        python3 -c 'import sys,urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$SPEEDTEST_PY_URL" "$tmp"
+    fi
+    # Sanity-check before trusting it: a captive portal or proxy error page
+    # would otherwise be "downloaded" successfully and then fail cryptically.
+    if [ -s "$tmp" ] && python3 "$tmp" --version 2>&1 | grep -qi 'speedtest-cli'; then
+        mv -f "$tmp" "$SPEEDTEST_PY"
+        printf '%s\n' "${C_GRN}Saved to $SPEEDTEST_PY${C_RST}"
+        return 0
+    fi
+    rm -f "$tmp"
+    printf '%s\n' "${C_RED}Download failed - check your internet connection.${C_RST}"
+    return 1
+}
+
+# _speedtest_backend -> prints one of: ookla, cli, cli_as_speedtest, go, py, "" (none)
 # Debian/Ubuntu's speedtest-cli package installs the SAME python script under
 # two names, /usr/bin/speedtest-cli AND /usr/bin/speedtest - the latter looks
 # exactly like Ookla's official CLI at a glance (need_cmd speedtest succeeds)
@@ -1408,6 +1445,8 @@ _speedtest_backend() {
         printf 'cli_as_speedtest'
     elif need_cmd speedtest-go; then
         printf 'go'
+    elif [ -s "$SPEEDTEST_PY" ] && need_cmd python3; then
+        printf 'py'
     fi
 }
 
@@ -1417,6 +1456,7 @@ _speedtest_run_plain() {
         cli) speedtest-cli ;;
         cli_as_speedtest) speedtest ;;
         go) speedtest-go ;;
+        py) python3 "$SPEEDTEST_PY" ;;
         *) printf '%s\n' "${C_RED}No speed test tool available.${C_RST}" ;;
     esac
 }
@@ -1430,6 +1470,7 @@ _speedtest_run_animated() {
             cli) speedtest-cli --json > "$tmp" 2>/dev/null ;;
             cli_as_speedtest) speedtest --json > "$tmp" 2>/dev/null ;;
             go) speedtest-go --json > "$tmp" 2>/dev/null ;;
+            py) python3 "$SPEEDTEST_PY" --json > "$tmp" 2>/dev/null ;;
         esac
     ) &
     local pid=$!
@@ -1454,7 +1495,7 @@ _speedtest_run_animated() {
             srv_loc=$(jq -r '.server.location // empty' "$tmp" 2>/dev/null)
             pub_ip=$(jq -r '.interface.externalIp // empty' "$tmp" 2>/dev/null)
             ;;
-        cli|cli_as_speedtest)
+        cli|cli_as_speedtest|py)
             ping_ms=$(jq -r '.ping // empty' "$tmp" 2>/dev/null)
             dl_mbps=$(jq -r 'if .download then (.download / 1000000) else empty end' "$tmp" 2>/dev/null)
             ul_mbps=$(jq -r 'if .upload then (.upload / 1000000) else empty end' "$tmp" 2>/dev/null)
@@ -1501,13 +1542,17 @@ _speedtest_run_animated() {
 
 net_speedtest() {
     header "Internet Speed Test"
-    if ! need_cmd speedtest && ! need_cmd speedtest-cli && ! need_cmd speedtest-go; then
+    if [ -z "$(_speedtest_backend)" ]; then
         printf '%s\n' "${C_DIM}Needs a speedtest tool: Ookla's speedtest CLI, 'speedtest-cli', or (on Kali, which doesn't package speedtest-cli) 'speedtest-go'.${C_RST}"
         if ! offer_install speedtest-cli speedtest-cli; then
             # speedtest-cli isn't in every distro's repos (e.g. Kali dropped it in
-            # favor of speedtest-go) - fall back to the alternative before giving up.
+            # favor of speedtest-go, RHEL-family only has it in EPEL) - try the
+            # alternatives before giving up.
             printf '%s\n' "${C_DIM}'speedtest-cli' isn't available from your package manager - trying 'speedtest-go' instead.${C_RST}"
-            offer_install speedtest-go speedtest-go || { pause; return; }
+            if ! offer_install speedtest-go speedtest-go; then
+                printf '%s\n' "${C_DIM}'speedtest-go' isn't available either - falling back to the standalone speedtest-cli script.${C_RST}"
+                _speedtest_fetch_py || { pause; return; }
+            fi
         fi
     fi
 
